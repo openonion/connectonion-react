@@ -1,0 +1,65 @@
+{
+  "name": "@connectonion/react",
+  "version": "0.2.2",
+  "description": "React hooks for ConnectOnion agents - useAgentForHuman, useVoiceInput, and browser identity",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "jest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "react",
+    "hooks",
+    "ai",
+    "agent",
+    "connectonion",
+    "nextjs",
+    "chat"
+  ],
+  "author": "ConnectOnion Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openonion/connectonion-react"
+  },
+  "bugs": {
+    "url": "https://github.com/openonion/connectonion-react/issues"
+  },
+  "homepage": "https://github.com/openonion/connectonion-react#readme",
+  "dependencies": {
+    "zustand": "^5.0.0"
+  },
+  "peerDependencies": {
+    "connectonion": "file:../../../../../../../tmp/cots-022/connectonion-0.2.2.tgz",
+    "react": ">=17.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.1",
+    "@types/jest": "^29.0.0",
+    "@types/react": "^18.0.0",
+    "connectonion": "file:../../../../../../../tmp/cots-022/connectonion-0.2.2.tgz",
+    "jest": "^29.0.0",
+    "jest-environment-jsdom": "^30.2.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "ts-jest": "^29.0.0",
+    "typescript": "^5.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
