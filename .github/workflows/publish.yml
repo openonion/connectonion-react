@@ -45,5 +45,16 @@ jobs:
       - name: Build
         run: npm run build
 
+      # 0.2.2 shipped with peerDependencies still pointing at a local tarball
+      # path, so it resolved fine in the repo and was uninstallable everywhere
+      # else. Pack it and install it into a clean project before publishing.
+      - name: Install the packed tarball into a clean project
+        run: |
+          TARBALL=$(npm pack --silent)
+          mkdir -p /tmp/install-check && cd /tmp/install-check
+          npm init -y >/dev/null
+          npm install react react-dom connectonion "$GITHUB_WORKSPACE/$TARBALL"
+          node -e "require('@connectonion/react')"
+
       - name: Publish to npm
         run: npm publish --provenance --access public
