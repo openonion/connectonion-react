@@ -62,7 +62,8 @@ than throwing. Keys outside the `co:agent:` prefix are never touched.
 ```
 
 The API is unchanged — same hooks, same signatures, same `localStorage` keys, so existing
-sessions carry over. `connectonion/react` still works in the 0.2.x line and is removed in 0.3.0.
+sessions carry over. `connectonion/react` worked through the 0.2.x line and was removed in
+`connectonion@0.3.0`.
 
 Full hook surface: [`docs/react.md`](docs/react.md).
 

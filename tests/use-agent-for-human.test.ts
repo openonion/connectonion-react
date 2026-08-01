@@ -1,7 +1,7 @@
 /**
  * @jest-environment jsdom
  *
- * Tests for connectonion/react hooks.
+ * Tests for the @connectonion/react hooks.
  *
  * Tests cover:
  * - useAgentForHuman(address, sessionId) hook initialization
