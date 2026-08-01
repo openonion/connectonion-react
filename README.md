@@ -41,6 +41,7 @@ function Chat({ address }: { address: string }) {
 |---|---|
 | `useAgentForHuman(address, sessionId?)` | the live WebSocket conversation — `ui`, `input`, `sendMessage`, `setMode`, `reconnect`, `reset`, `profile`, `status`, `error` |
 | `useVoiceInput(options?)` | microphone capture → transcription |
+| `isChatItemType` / `isEventType` | type guards that narrow a `ChatItem` by its `type` |
 | `fetchAgentInfo(address)` | one-shot public agent info (re-exported from the core package) |
 | `generateBrowser` / `saveBrowser` / `loadBrowser` / `signBrowser` / `createSignedPayloadBrowser` | Ed25519 browser identity |
 | types | `ChatItem`, `AgentInfo`, `SkillInfo`, `ApprovalMode`, `Message`, `Response`, … |
@@ -60,7 +61,23 @@ than throwing. Keys outside the `co:agent:` prefix are never touched.
 + import { useAgentForHuman } from '@connectonion/react'
 ```
 
-The API is unchanged. `connectonion/react` still works in the 0.2.x line and is removed in 0.3.0.
+The API is unchanged — same hooks, same signatures, same `localStorage` keys, so existing
+sessions carry over. `connectonion/react` still works in the 0.2.x line and is removed in 0.3.0.
+
+Full hook surface: [`docs/react.md`](docs/react.md).
+
+## Development
+
+```bash
+npm install
+npx tsc --noEmit
+npm test
+npm run build
+```
+
+Tests run against the **published** `connectonion`, not a symlink — a symlinked core package
+typechecks against unreleased code and hides exactly the resolution breakage this split
+introduced.
 
 ## License
 
