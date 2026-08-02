@@ -10,7 +10,7 @@
 
 import { create, StoreApi, UseBoundStore } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import type { ChatItem, AgentStatus, SessionState } from 'connectonion/connect';
+import type { ChatItem, AgentStatus, SessionState } from './connect';
 
 // =============================================================================
 // Types

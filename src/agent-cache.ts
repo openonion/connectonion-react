@@ -13,7 +13,7 @@
  * MAX_LIVE_AGENTS stay connected, older ones are closed. The active session is always
  * the most-recently-used, so it is never the one evicted.
  */
-import { connect } from 'connectonion/connect';
+import { connect } from './connect';
 
 type Agent = ReturnType<typeof connect>;
 

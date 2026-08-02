@@ -15,7 +15,7 @@ import {
   ApprovalMode,
   OutgoingMessage,
   RemoteSessionStatus,
-} from 'connectonion/connect';
+} from './connect';
 import { acquireAgent, dropAgent } from './agent-cache';
 import { getStore, type Message } from './store';
 
@@ -99,7 +99,7 @@ export interface UseAgentForHumanReturn {
    * @param options.images - Base64-encoded images to attach to the message
    * @param options.files - File attachments with name, type, size, and dataUrl
    */
-  input: (prompt: string, options?: { images?: string[]; files?: import('connectonion/connect').FileAttachment[] }) => void;
+  input: (prompt: string, options?: { images?: string[]; files?: import('./connect').FileAttachment[] }) => void;
 
   /**
    * Open the WebSocket without sending input, so a landing/draft view receives the
@@ -292,7 +292,7 @@ export function useAgentForHuman(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
-  const input = (prompt: string, options?: { images?: string[]; files?: import('connectonion/connect').FileAttachment[] }) => {
+  const input = (prompt: string, options?: { images?: string[]; files?: import('./connect').FileAttachment[] }) => {
     setError(null);
 
     // Merge session before dispatching: the agent may have received a mode change via
