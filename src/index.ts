@@ -42,4 +42,4 @@ export {
   signBrowser,
   createSignedPayloadBrowser,
   type AddressData,
-} from 'connectonion/address-browser';
+} from './address-browser';

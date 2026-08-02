@@ -1,6 +1,6 @@
 {
   "name": "@connectonion/react",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "React hooks for ConnectOnion agents — useAgentForHuman, useVoiceInput, browser identity, and the agent connection itself",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -16,6 +16,10 @@
     "./address-browser": {
       "types": "./dist/address-browser.d.ts",
       "default": "./dist/address-browser.js"
+    },
+    "./transcribe": {
+      "types": "./dist/transcribe.d.ts",
+      "default": "./dist/transcribe.js"
     },
     "./package.json": "./package.json"
   },
