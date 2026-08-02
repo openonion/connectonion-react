@@ -15,7 +15,7 @@ import { renderHook, act } from '@testing-library/react';
 import { useAgentForHuman } from '../src';
 
 // Mock browser identity to skip signing
-jest.mock('connectonion/address-browser', () => ({
+jest.mock('../src/address-browser', () => ({
   generate: () => ({ address: '0xmock', privateKey: new Uint8Array(64), publicKey: new Uint8Array(32) }),
   generateBrowser: () => ({ address: '0xmock', privateKey: new Uint8Array(64), publicKey: new Uint8Array(32) }),
   load: () => null,
@@ -96,7 +96,7 @@ const DynamicWS = new Proxy(MockWebSocket, {
 });
 
 // Mock connect() to inject test WebSocket
-jest.mock('connectonion/connect', () => {
+jest.mock('../src/connect', () => {
   const actual = jest.requireActual('connectonion/connect');
   return {
     ...actual,

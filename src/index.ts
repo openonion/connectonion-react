@@ -12,9 +12,9 @@ export type {
   SkillInfo,
   ApprovalMode,
   OutgoingMessage,
-} from 'connectonion/connect';
+} from './connect';
 
-export { fetchAgentInfo } from 'connectonion/connect';
+export { fetchAgentInfo } from './connect';
 
 // Store types
 export { type Message } from './store';
@@ -24,7 +24,7 @@ export { useAgentForHuman, isChatItemType, isEventType } from './use-agent-for-h
 export type { UseAgentForHumanReturn } from './use-agent-for-human';
 
 /** @deprecated Use ChatItem instead */
-export type { ChatItem as UIEvent } from 'connectonion/connect';
+export type { ChatItem as UIEvent } from './connect';
 
 // Voice input
 export {

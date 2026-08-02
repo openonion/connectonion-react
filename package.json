@@ -1,13 +1,21 @@
 {
   "name": "@connectonion/react",
-  "version": "0.2.3",
-  "description": "React hooks for ConnectOnion agents - useAgentForHuman, useVoiceInput, and browser identity",
+  "version": "0.3.0",
+  "description": "React hooks for ConnectOnion agents — useAgentForHuman, useVoiceInput, browser identity, and the agent connection itself",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./connect": {
+      "types": "./dist/connect/index.d.ts",
+      "default": "./dist/connect/index.js"
+    },
+    "./address-browser": {
+      "types": "./dist/address-browser.d.ts",
+      "default": "./dist/address-browser.js"
     },
     "./package.json": "./package.json"
   },
@@ -41,10 +49,11 @@
   },
   "homepage": "https://github.com/openonion/connectonion-react#readme",
   "dependencies": {
+    "tweetnacl": "^1.0.3",
+    "ws": "^8.18.0",
     "zustand": "^5.0.0"
   },
   "peerDependencies": {
-    "connectonion": ">=0.2.2",
     "react": ">=17.0.0"
   },
   "devDependencies": {
@@ -61,5 +70,10 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "browser": {
+    "fs": false,
+    "path": false,
+    "ws": false
   }
 }
