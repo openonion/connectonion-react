@@ -8,7 +8,7 @@
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { transcribe } from 'connectonion/transcribe'
+import { transcribe } from './transcribe'
 
 export type VoiceInputStatus = 'idle' | 'recording' | 'transcribing' | 'error'
 
