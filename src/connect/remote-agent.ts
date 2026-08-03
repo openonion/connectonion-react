@@ -766,10 +766,26 @@ export class RemoteAgent {
     //
     // The OUTPUT branch twenty lines above already says "Don't close WS — keep it for
     // next input()". Same handler, same reasoning, and this branch disagreed with it.
+    // An ERROR can arrive with a connect in flight rather than an input: a trust
+    // denial happens during CONNECT, before there is anything to answer. That
+    // case used to fall through here and the connect was left to its own
+    // 30-second deadline — by which point "forbidden: no matching allow
+    // condition" had been dropped and the caller was told the connection timed
+    // out. `default: deny` is what `strict` ships, so that was the first
+    // experience of every correctly configured agent meeting a new client. #434.
     if (data?.type === 'ERROR') {
       const err = new Error(`Agent error: ${String(data.message || data.error || 'Unknown error')}`);
+      const onboarding = this._status === 'waiting';
       this._error = err;
-      this._status = 'idle';
+      // Not while a human is onboarding. ONBOARD_REQUIRED leaves the connect
+      // pending on purpose — the host finishes the interrupted CONNECT itself
+      // after a good code, so there is no client retry to resolve anything
+      // else. A wrong code arrives as ERROR too, and settling here would strand
+      // the retry exactly as it did before 0.3.1: "Checking…" forever, reload
+      // the only way out. Codes are hyphenated strings typed on phones; a
+      // first-try miss is ordinary.
+      if (this._connectReject && !onboarding) this._settleConnect(err);
+      if (!onboarding) this._status = 'idle';
       const reject = this._inputReject;
       this._settleInput();
       reject?.(err);
