@@ -40,6 +40,30 @@ export function normalizeRelayUrl(relayUrl: string): string {
   return normalized;
 }
 
+/**
+ * Drop candidates this page could never reach.
+ *
+ * An agent advertises every address it answers on, and the list is written from
+ * the agent's point of view: localhost, the LAN, the public IP. A CLI resolving
+ * it is usually on one of those networks. A browser tab is not — `localhost`
+ * there is the *reader's* machine.
+ *
+ * From an https:// page every http:// candidate is dead before it is tried; the
+ * browser blocks it as mixed content. On chat.openonion.ai that was three
+ * guaranteed failures per page load, two console errors, a probe of the
+ * reader's own port 8001, and the relay fallback waiting behind all of it.
+ *
+ * Keyed on the page's own protocol so local development is untouched: an
+ * http://localhost:3000 dev page still reaches an http agent, and outside a
+ * browser (no `location`) nothing is filtered at all.
+ */
+function reachableFromHere(endpoints: string[]): string[] {
+  const pageIsSecure =
+    typeof location !== 'undefined' && location?.protocol === 'https:';
+  if (!pageIsSecure) return endpoints;
+  return endpoints.filter(ep => ep.startsWith('https://'));
+}
+
 function sortByProximity(endpoints: string[]): string[] {
   return [...endpoints].sort((a, b) => {
     const getPriority = (url: string): number => {
@@ -148,7 +172,8 @@ export async function resolveEndpoint(
 
   if (!agentInfo?.endpoints?.length) return null;
 
-  const httpEndpoints = sortByProximity(agentInfo.endpoints).filter(ep => ep.startsWith('http'));
+  const httpEndpoints = sortByProximity(reachableFromHere(agentInfo.endpoints))
+    .filter(ep => ep.startsWith('http'));
 
   for (const httpUrl of httpEndpoints) {
     // Probe — many advertised endpoints (localhost, docker IPs, NAT-bound
@@ -215,7 +240,7 @@ export async function fetchAgentInfo(
   };
 
   const httpEndpoints = sortByProximity(
-    (relayData.endpoints ?? []).filter(ep => ep.startsWith('http'))
+    reachableFromHere(relayData.endpoints ?? []).filter(ep => ep.startsWith('http'))
   );
 
   for (const httpUrl of httpEndpoints) {
