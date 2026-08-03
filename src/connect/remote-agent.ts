@@ -675,6 +675,15 @@ export class RemoteAgent {
         type: 'onboard_required',
         methods: (data.methods || []) as string[],
         paymentAmount: data.payment_amount as number | undefined,
+        // Where to send it. The host publishes this and protocol.md documents
+        // it; dropping it made the payment branch of an onboard gate unusable,
+        // because a client could ask for money without saying where.
+        //
+        // This is the second copy of this fix. src/connect/ lives here and in
+        // connectonion-ts, so a protocol change has to be made in both — the
+        // core fix (connectonion-ts#30, v0.3.1) does not reach anyone importing
+        // this package.
+        paymentAddress: data.payment_address as string | undefined,
       });
     }
 
