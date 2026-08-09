@@ -23,7 +23,6 @@ jobs:
     timeout-minutes: 30
     permissions:
       security-events: write
-      actions: read
       contents: read
 
     steps:
