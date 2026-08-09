@@ -5,10 +5,11 @@ React hooks for connecting to remote AI agents with real-time UI updates.
 ## Installation
 
 ```bash
-npm install @connectonion/react connectonion
+npm install @connectonion/react
 ```
 
-`react` (17+) and `connectonion` are peer dependencies — install them alongside this package.
+`react` (17+) is the only peer dependency. The browser connection layer is included in
+`@connectonion/react`; do not install the legacy TypeScript core just to use these hooks.
 
 ## Quick Start
 
@@ -312,12 +313,11 @@ function Chat({ sessionId }: { sessionId: string }) {
 ### With Signing Keys (Strict Trust)
 
 ```tsx
-import { useAgentForHuman } from '@connectonion/react';
-import { address } from 'connectonion';
+import { generateBrowser, useAgentForHuman } from '@connectonion/react';
 
 function SecureAgent({ sessionId }: { sessionId: string }) {
   // Generate or load keys
-  const [keys] = useState(() => address.generate());
+  const [keys] = useState(() => generateBrowser());
 
   const { input } = useAgentForHuman('0x123abc', { sessionId, keys });
 

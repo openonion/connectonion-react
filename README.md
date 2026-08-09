@@ -3,20 +3,18 @@
 React hooks for [ConnectOnion](https://docs.connectonion.com) agents.
 
 ```bash
-npm install @connectonion/react connectonion
+npm install @connectonion/react
 ```
 
-`connectonion` and `react` are peer dependencies — you install them yourself, so this
-package can never pull in a second copy of either.
+`react` is the only peer dependency. Since `@connectonion/react@0.3.0`, the browser
+connection and protocol implementation ship in this package; React applications do not
+need the legacy `connectonion` TypeScript core package.
 
 ## Why it is a separate package
 
-The hooks used to live at `connectonion/react`. That forced a `react` peer, a `zustand`
-runtime dependency, and jsdom/testing-library devDependencies onto every consumer of the
-SDK — including Node and Electron apps that never render a component. It also tied the two
-to one release cadence: a hook fix meant republishing the whole SDK.
-
-Split, the core package stays runtime-agnostic and the hooks ship on their own schedule.
+The hooks used to live at `connectonion/react`. They moved to a dedicated React package in
+the 0.2.x line, and `@connectonion/react@0.3.0` then absorbed the browser connection layer.
+That leaves React users with one supported package and one release cadence.
 
 ## Quick start
 
@@ -42,7 +40,8 @@ function Chat({ address }: { address: string }) {
 | `useAgentForHuman(address, sessionId?)` | the live WebSocket conversation — `ui`, `input`, `sendMessage`, `setMode`, `reconnect`, `reset`, `profile`, `status`, `error` |
 | `useVoiceInput(options?)` | microphone capture → transcription |
 | `isChatItemType` / `isEventType` | type guards that narrow a `ChatItem` by its `type` |
-| `fetchAgentInfo(address)` | one-shot public agent info (re-exported from the core package) |
+| `fetchAgentInfo(address)` | one-shot public agent info |
+| `connect(address, options?)` from `@connectonion/react/connect` | low-level connection API |
 | `generateBrowser` / `saveBrowser` / `loadBrowser` / `signBrowser` / `createSignedPayloadBrowser` | Ed25519 browser identity |
 | types | `ChatItem`, `AgentInfo`, `SkillInfo`, `ApprovalMode`, `Message`, `Response`, … |
 
@@ -76,9 +75,8 @@ npm test
 npm run build
 ```
 
-Tests run against the **published** `connectonion`, not a symlink — a symlinked core package
-typechecks against unreleased code and hides exactly the resolution breakage this split
-introduced.
+The test suite exercises the connection implementation bundled in this package, including
+the React hooks, protocol mapping, trust checks, and browser-safe endpoint selection.
 
 ## License
 
