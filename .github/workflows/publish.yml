@@ -4,7 +4,6 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,21 +13,25 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Install dependencies
-        run: npm install
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=moderate
+
+      - name: Type-check
+        run: npm run typecheck
 
       # Fail early if the pushed tag doesn't match the version being published —
       # catches a mistyped tag or a forgotten version bump before it hits npm.
-      # (Skipped for workflow_dispatch, which runs off a branch with no tag.)
       - name: Verify tag matches package.json version
-        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           PKG_VERSION=$(node -p "require('./package.json').version")
           TAG_VERSION=${GITHUB_REF_NAME#v}
@@ -53,7 +56,7 @@ jobs:
           TARBALL=$(npm pack --silent)
           mkdir -p /tmp/install-check && cd /tmp/install-check
           npm init -y >/dev/null
-          npm install react react-dom connectonion "$GITHUB_WORKSPACE/$TARBALL"
+          npm install react react-dom "$GITHUB_WORKSPACE/$TARBALL"
           node -e "require('@connectonion/react')"
 
       - name: Publish to npm

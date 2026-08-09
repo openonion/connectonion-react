@@ -97,7 +97,7 @@ const DynamicWS = new Proxy(MockWebSocket, {
 
 // Mock connect() to inject test WebSocket
 jest.mock('../src/connect', () => {
-  const actual = jest.requireActual('connectonion/connect');
+  const actual = jest.requireActual('../src/connect');
   return {
     ...actual,
     connect: (address: string) => new actual.RemoteAgent(address, {
