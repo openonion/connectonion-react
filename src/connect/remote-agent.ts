@@ -51,8 +51,11 @@ import { mapEventToChatItem } from './chat-item-mapper';
 import {
   ACPPermissionRequest,
   ApprovalRejectMode,
+  acpCancelFrame,
+  acpPermissionCancelledFrame,
   acpPermissionResponseFrame,
   decodeACPPermissionRequest,
+  hostSupportsACPCancel,
 } from './wire-events';
 
 interface PendingApproval {
@@ -98,6 +101,8 @@ export class RemoteAgent {
   // Persistent WebSocket
   private _ws: WebSocketLike | null = null;
   private _authenticated = false;
+  private _supportsACPCancel = false;
+  private _interruptSent = false;
 
   // Promise resolution for current input() call
   private _inputResolve: ((value: Response) => void) | null = null;
@@ -177,6 +182,7 @@ export class RemoteAgent {
     const isInterjection = this._status === 'working' && this._inputResolve !== null;
 
     if (!isInterjection) {
+      this._interruptSent = false;
       this._addChatItem({ type: 'thinking', id: '__optimistic__', status: 'running' });
       this._status = 'working';
     }
@@ -277,6 +283,10 @@ export class RemoteAgent {
   }
 
   send(message: Record<string, unknown>): void {
+    if (message.type === 'INTERRUPT') {
+      this.interrupt();
+      return;
+    }
     if (message.type === 'APPROVAL_RESPONSE') {
       this.respondToApproval(
         message.approved === true,
@@ -319,13 +329,6 @@ export class RemoteAgent {
     const pending = this._pendingApproval;
     if (!pending || pending.answered) return;
     if (!this._ws) throw new Error('No active connection');
-    pending.answered = true;
-    const item = this._chatItems.find(
-      (candidate) => candidate.id === pending.chatItemId
-        && candidate.type === 'approval_needed',
-    );
-    if (item?.type === 'approval_needed') item.answered = true;
-
     const rejectionMode = approvalRejectMode(mode);
     const response = pending.acp
       ? acpPermissionResponseFrame(
@@ -338,7 +341,48 @@ export class RemoteAgent {
         ...(!approved && { mode: rejectionMode }),
         ...(!approved && feedback && { feedback }),
       };
-    this._ws.send(JSON.stringify(response));
+    this._sendPendingApproval(pending, response);
+  }
+
+  interrupt(): void {
+    if (this._interruptSent) return;
+    if (!this._ws || !this._authenticated) {
+      throw new Error('No active connection');
+    }
+    this._interruptSent = true;
+
+    const pending = this._pendingApproval;
+    if (pending && !pending.answered) {
+      const response = pending.acp
+        ? acpPermissionCancelledFrame(pending.acp)
+        : {
+          type: 'APPROVAL_RESPONSE',
+          approved: false,
+          scope: 'once',
+          mode: 'reject_hard',
+        };
+      this._sendPendingApproval(pending, response);
+      return;
+    }
+
+    const sessionId = this._currentSession?.session_id;
+    const message = this._supportsACPCancel && sessionId
+      ? acpCancelFrame(sessionId)
+      : { type: 'INTERRUPT' };
+    this._ws.send(JSON.stringify(message));
+  }
+
+  private _sendPendingApproval(
+    pending: PendingApproval,
+    response: Record<string, unknown>,
+  ): void {
+    pending.answered = true;
+    const item = this._chatItems.find(
+      (candidate) => candidate.id === pending.chatItemId
+        && candidate.type === 'approval_needed',
+    );
+    if (item?.type === 'approval_needed') item.answered = true;
+    this._ws!.send(JSON.stringify(response));
     this._status = 'working';
     this._onMessage?.();
   }
@@ -602,6 +646,7 @@ export class RemoteAgent {
 
     // CONNECTED — resolve ensureConnected() promise
     if (data?.type === 'CONNECTED') {
+      this._supportsACPCancel = hostSupportsACPCancel(data);
       if (this._connectResolve) {
         if (this._connectTimer) { clearTimeout(this._connectTimer); this._connectTimer = null; }
         const resolve = this._connectResolve;
@@ -926,6 +971,7 @@ export class RemoteAgent {
   private _handleConnectionLoss(): void {
     this._ws = null;
     this._authenticated = false;
+    this._supportsACPCancel = false;
     this._stopPingMonitor();
     this._settleSessionStatusWaiters('not_found');
 
@@ -967,6 +1013,7 @@ export class RemoteAgent {
       this._ws = null;
     }
     this._authenticated = false;
+    this._supportsACPCancel = false;
     this._connectionState = 'disconnected';
     this._settleSessionStatusWaiters('not_found');
   }
