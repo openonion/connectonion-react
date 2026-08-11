@@ -57,9 +57,9 @@ export { RemoteAgent } from './remote-agent';
  * };
  * const response = await agent.input("Book a flight to NYC");
  *
- * // With signing (for strict trust agents)
- * import { address } from '@connectonion/react';
- * const keys = address.load('.co');
+ * // With browser signing (for strict trust agents)
+ * import { generateBrowser } from '@connectonion/react';
+ * const keys = generateBrowser();
  * const agent = connect("0x3d4017c3...", { keys });
  * ```
  */

@@ -463,7 +463,7 @@ function Page() {
 
 | Feature | `useAgentForHuman()` | `connect()` |
 |---------|--------------|-------------|
-| Reactive updates | Automatic | Manual polling |
+| Reactive updates | Automatic | You wire `onMessage` |
 | State management | Built-in (Zustand) | You manage |
 | Session persistence | localStorage (automatic) | In-memory only |
 | SSR safe | Yes | Yes |
