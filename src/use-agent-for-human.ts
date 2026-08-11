@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AgentInfo,
   ChatItem,
+  PlanEntry,
   AgentStatus,
   ConnectionState,
   SessionState,
@@ -49,6 +50,9 @@ export interface UseAgentForHumanReturn {
    * before reading type-specific fields.
    */
   ui: ChatItem[];
+
+  /** Latest full ACP plan snapshot for this session. Never a chat item. */
+  plan: ReadonlyArray<PlanEntry>;
 
   /** Session UUID passed to the hook. Echoed here so consumers don't need a separate ref. */
   sessionId: string;
@@ -246,6 +250,13 @@ export function useAgentForHuman(
     agent.modeChangePending,
   );
 
+  // Detach the public observation from persisted/server-owned session data while
+  // keeping its reference stable until the underlying plan snapshot changes.
+  const plan = useMemo(
+    () => session?.plan?.map((entry) => ({ ...entry })) ?? [],
+    [session?.plan],
+  );
+
   // Register a single onMessage callback for the lifetime of this agent instance.
   // This replaces a polling interval: every streaming event from the server triggers
   // one synchronous flush of all derived state into React/Zustand.
@@ -426,6 +437,7 @@ export function useAgentForHuman(
     status,
     connectionState,
     ui,
+    plan,
     sessionId,
     isProcessing: status !== 'idle',
     error,

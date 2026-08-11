@@ -12,10 +12,16 @@ import type {
   SetSessionModeResponse,
   ToolCallStatus,
 } from '@agentclientprotocol/sdk';
-import type { ApprovalMode } from './types';
+import type { ApprovalMode, PlanEntry } from './types';
 
 const ACP_SCHEMA_VERSION = 'schema-v1.19.0';
 const TOOL_STATUSES = new Set(['pending', 'in_progress', 'completed', 'failed']);
+const PLAN_PRIORITIES = new Set<PlanEntry['priority']>(['high', 'medium', 'low']);
+const PLAN_STATUSES = new Set<PlanEntry['status']>([
+  'pending',
+  'in_progress',
+  'completed',
+]);
 const SERVER_APPROVAL_MODES = new Set<ServerApprovalMode>([
   'safe',
   'accept_edits',
@@ -53,6 +59,11 @@ export type ServerApprovalMode = Exclude<ApprovalMode, 'plan'>;
 export interface ACPModeUpdate {
   sessionId: string;
   mode: ServerApprovalMode;
+}
+
+export interface ACPPlanUpdate {
+  sessionId: string;
+  entries: PlanEntry[];
 }
 
 export interface HostSessionModeState {
@@ -354,6 +365,62 @@ export function decodeACPModeUpdate(
     sessionId: params.sessionId,
     mode,
   };
+}
+
+/** Decode the stable ACP full-replacement plan update for one session. */
+export function decodeACPPlanUpdate(frame: unknown): ACPPlanUpdate | null {
+  const carrier = record(frame);
+  if (
+    carrier?.type !== 'ACP_NOTIFICATION'
+    || carrier.acpSchema !== ACP_SCHEMA_VERSION
+  ) return null;
+  const message = record(carrier.message);
+  if (
+    message?.jsonrpc !== '2.0'
+    || message.method !== 'session/update'
+  ) return null;
+  const params = record(message.params);
+  const update = record(params?.update);
+  if (!nonEmpty(params?.sessionId) || update?.sessionUpdate !== 'plan') {
+    return null;
+  }
+  const entries = normalizePlanEntries(update.entries);
+  return entries ? { sessionId: params.sessionId, entries } : null;
+}
+
+/** Decode the rolling-upgrade twin emitted by a ConnectOnion Host. */
+export function decodeLegacyPlanUpdate(frame: unknown): ACPPlanUpdate | null {
+  const event = record(frame);
+  if (event?.type !== 'plan' || !nonEmpty(event.session_id)) return null;
+  const entries = normalizePlanEntries(event.entries);
+  return entries ? { sessionId: event.session_id, entries } : null;
+}
+
+/**
+ * Validate a plan atomically and detach it from untrusted transport/session data.
+ * Unknown entry fields are deliberately dropped; one invalid item rejects the
+ * whole full-replacement snapshot so a partial plan is never rendered.
+ */
+export function normalizePlanEntries(value: unknown): PlanEntry[] | null {
+  if (!Array.isArray(value)) return null;
+  const entries: PlanEntry[] = [];
+  for (const candidate of value) {
+    const entry = record(candidate);
+    if (
+      !entry
+      || !nonEmpty(entry.content)
+      || typeof entry.priority !== 'string'
+      || !PLAN_PRIORITIES.has(entry.priority as PlanEntry['priority'])
+      || typeof entry.status !== 'string'
+      || !PLAN_STATUSES.has(entry.status as PlanEntry['status'])
+    ) return null;
+    entries.push({
+      content: entry.content,
+      priority: entry.priority as PlanEntry['priority'],
+      status: entry.status as PlanEntry['status'],
+    });
+  }
+  return entries;
 }
 
 export function decodeIncomingEvent(
