@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 — unreleased
+## 0.4.0 — 2026-08-12
 
 This release makes `@connectonion/react` the browser's ACP ownership boundary. The
 standalone TypeScript SDK is not required by React consumers.
@@ -12,6 +12,11 @@ standalone TypeScript SDK is not required by React consumers.
 - Host-advertised session modes through `availableModes`.
 - Acknowledged `setSessionMode` transactions and `modeChangePending` UI state.
 - ACP cancellation when the Host advertises it.
+- Host-supplied thoughts normalized as stable `thinking` items. The ConnectOnion
+  Host profile publishes only persisted, already-visible application thoughts;
+  React cannot classify text supplied by third-party Hosts.
+- Session-scoped, complete-replacement ACP plan state through
+  `useAgentForHuman().plan`, including reconnect persistence and empty clearing.
 
 ### Security and compatibility
 
@@ -23,6 +28,8 @@ standalone TypeScript SDK is not required by React consumers.
   `ServerApprovalMode` and is never serialized as ACP policy.
 - Legacy `setMode` remains deprecated for source compatibility. New consumers should use
   `setSessionMode` and must not author ACP frames themselves.
+- ACP plan state is read-only progress information. It is separate from interactive
+  `plan_review` approval and cannot authorize implementation.
 
-Publication is intentionally separate: merging the release-preparation PR does not tag or
-publish the package.
+Publication remains tag-driven: merging release metadata alone does not publish the
+package.

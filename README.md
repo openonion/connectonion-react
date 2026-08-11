@@ -21,8 +21,8 @@ That leaves React users with one supported package and one release cadence.
 ```tsx
 import { useAgentForHuman } from '@connectonion/react'
 
-function Chat({ address }: { address: string }) {
-  const { ui, input, status, profile } = useAgentForHuman(address)
+function Chat({ address, sessionId }: { address: string; sessionId: string }) {
+  const { ui, input, status, profile } = useAgentForHuman(address, sessionId)
 
   return (
     <>
@@ -37,7 +37,7 @@ function Chat({ address }: { address: string }) {
 
 | | |
 |---|---|
-| `useAgentForHuman(address, sessionId?)` | the live WebSocket conversation — `ui`, `input`, `respondToApproval`, acknowledged `setSessionMode`, legacy `setMode`, `availableModes`, `modeChangePending`, `reconnect`, `reset`, `profile`, `status`, `error` |
+| `useAgentForHuman(address, sessionId)` | the live WebSocket conversation — `ui`, read-only `plan`, `input`, `respondToApproval`, acknowledged `setSessionMode`, legacy `setMode`, `availableModes`, `modeChangePending`, `reconnect`, `reset`, `profile`, `status`, `error` |
 | `useVoiceInput(options?)` | microphone capture → transcription |
 | `isChatItemType` / `isEventType` | type guards that narrow a `ChatItem` by its `type` |
 | `fetchAgentInfo(address)` | one-shot public agent info |
@@ -69,6 +69,29 @@ this API; products may layer a Plan workflow over an acknowledged Host `safe` mo
 
 The old `setMode(mode, { turns })` remains temporarily for source compatibility but is
 optimistic and deprecated. New React applications must not use it or construct ACP frames.
+
+## Current plan
+
+`plan` is the latest complete ACP plan snapshot for this session. It is separate from the
+append-only `ui` transcript and from interactive `plan_review` approval:
+
+```tsx
+const { plan } = useAgentForHuman(address, sessionId)
+
+return plan.length ? (
+  <ol>
+    {plan.map((entry, index) => (
+      <li key={index}>
+        {entry.content} — {entry.priority} — {entry.status}
+      </li>
+    ))}
+  </ol>
+) : null
+```
+
+Every update replaces the complete list; an empty list clears it. Entries have
+`high | medium | low` priority and `pending | in_progress | completed` status. The
+state is observational only: rendering it must not approve tools or authorize work.
 
 ## Sessions and storage
 
