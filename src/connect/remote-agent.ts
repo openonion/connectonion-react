@@ -50,12 +50,18 @@ import { ensureKeys, signPayload } from './auth';
 import { mapEventToChatItem } from './chat-item-mapper';
 import {
   ACPPermissionRequest,
+  ACPSetModeResponse,
   ApprovalRejectMode,
+  HostSessionModeState,
+  acpResponseRequestId,
   acpCancelFrame,
   acpPermissionCancelledFrame,
   acpPermissionResponseFrame,
+  acpSetSessionModeFrame,
   decodeACPModeUpdate,
   decodeACPPermissionRequest,
+  decodeACPSetModeResponse,
+  hostSessionModeState,
   hostSupportsACPCancel,
   parseServerApprovalMode,
   ServerApprovalMode,
@@ -66,6 +72,17 @@ interface PendingApproval {
   answered: boolean;
   acp?: ACPPermissionRequest;
 }
+
+interface PendingModeChange {
+  requestId: string;
+  sessionId: string;
+  mode: ServerApprovalMode;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+const MODE_CHANGE_TIMEOUT_MS = 30000;
 
 function approvalRejectMode(value: unknown): ApprovalRejectMode {
   return value === 'reject_soft' || value === 'reject_explain'
@@ -105,6 +122,7 @@ export class RemoteAgent {
   private _ws: WebSocketLike | null = null;
   private _authenticated = false;
   private _supportsACPCancel = false;
+  private _sessionModes: HostSessionModeState | null = null;
   private _interruptSent = false;
 
   // Promise resolution for current input() call
@@ -133,6 +151,7 @@ export class RemoteAgent {
   // attempt settles so a failed connect can be retried.
   private _connecting: Promise<void> | null = null;
   private _pendingApproval: PendingApproval | null = null;
+  private _pendingModeChange: PendingModeChange | null = null;
 
   _onMessage: (() => void) | null = null;
   set onMessage(fn: (() => void) | null) { this._onMessage = fn; }
@@ -153,6 +172,10 @@ export class RemoteAgent {
   get currentSession(): SessionState | null { return this._currentSession; }
   get ui(): ChatItem[] { return this._chatItems; }
   get mode(): ApprovalMode { return this._currentSession?.mode || 'safe'; }
+  get availableModes(): ReadonlyArray<HostSessionModeState['availableModes'][number]> {
+    return this._sessionModes?.availableModes.map((mode) => ({ ...mode })) ?? [];
+  }
+  get modeChangePending(): boolean { return this._pendingModeChange !== null; }
   get error(): Error | null { return this._error || null; }
   get dashboardHtml(): string | null { return this._dashboardHtml; }
   get profile(): AgentInfo | null { return this._profile; }
@@ -390,6 +413,69 @@ export class RemoteAgent {
     this._onMessage?.();
   }
 
+  /** Change durable Host policy only after one owned ACP acknowledgement. */
+  async setSessionMode(mode: ServerApprovalMode): Promise<void> {
+    try {
+      if (parseServerApprovalMode(mode) !== mode) {
+        throw new Error(`Unsupported server session mode: ${String(mode)}`);
+      }
+      if (this._pendingModeChange) {
+        throw new Error('A session mode change is already pending');
+      }
+
+      this._error = null;
+      await this._ensureConnected();
+      const sessionId = this._currentSession?.session_id;
+      if (!sessionId || !this._ws || !this._authenticated) {
+        throw new Error('No authenticated session');
+      }
+      if (!this._sessionModes) {
+        throw new Error('Host does not support acknowledged ACP session modes');
+      }
+      if (!this._sessionModes.availableModes.some((item) => item.id === mode)) {
+        throw new Error(`Session mode is not available: ${mode}`);
+      }
+      if (this._currentSession?.mode === mode) return;
+
+      const requestId = generateUUID();
+      const request = acpSetSessionModeFrame(requestId, sessionId, mode);
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          const pending = this._pendingModeChange;
+          if (pending?.requestId !== requestId) return;
+          this._rejectModeChange(
+            pending,
+            new Error('Session mode change timed out'),
+          );
+        }, MODE_CHANGE_TIMEOUT_MS);
+        this._pendingModeChange = {
+          requestId,
+          sessionId,
+          mode,
+          resolve,
+          reject,
+          timer,
+        };
+        this._onMessage?.();
+        try {
+          this._ws!.send(JSON.stringify(request));
+        } catch (cause) {
+          const error = cause instanceof Error ? cause : new Error(String(cause));
+          const pending = this._pendingModeChange;
+          if (pending) this._rejectModeChange(pending, error);
+        }
+      });
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      if (this._error !== error) {
+        this._error = error;
+        this._onMessage?.();
+      }
+      throw error;
+    }
+  }
+
+  /** @deprecated Use setSessionMode for acknowledged server policy changes. */
   setMode(mode: ApprovalMode, options?: { turns?: number }): void {
     if (!this._currentSession) {
       this._currentSession = { mode };
@@ -415,6 +501,40 @@ export class RemoteAgent {
       this._currentSession.mode = mode;
     }
     return true;
+  }
+
+  private _resolveModeChange(
+    pending: PendingModeChange,
+    response: ACPSetModeResponse,
+  ): void {
+    if (this._pendingModeChange !== pending) return;
+    clearTimeout(pending.timer);
+    this._pendingModeChange = null;
+    if ('error' in response) {
+      const error = new Error(response.error.message);
+      (error as Error & { code?: number; data?: unknown }).code = response.error.code;
+      (error as Error & { code?: number; data?: unknown }).data = response.error.data;
+      this._error = error;
+      pending.reject(error);
+      this._onMessage?.();
+      return;
+    }
+    this._applyServerMode(pending.mode);
+    this._error = null;
+    pending.resolve();
+    this._onMessage?.();
+  }
+
+  private _rejectModeChange(
+    pending: PendingModeChange,
+    error: Error,
+  ): void {
+    if (this._pendingModeChange !== pending) return;
+    clearTimeout(pending.timer);
+    this._pendingModeChange = null;
+    this._error = error;
+    pending.reject(error);
+    this._onMessage?.();
   }
 
   reset(): void {
@@ -635,6 +755,12 @@ export class RemoteAgent {
     if (connected.server_newer && connected.session) {
       this._currentSession = connected.session as SessionState;
     }
+    // CONNECTED capability state is authoritative. A server_newer session can
+    // still contain the pre-transaction mode, so reapply the advertised value
+    // after accepting the durable conversation snapshot.
+    if (this._sessionModes) {
+      this._applyServerMode(this._sessionModes.currentModeId);
+    }
     if (connected.server_newer && connected.chat_items && Array.isArray(connected.chat_items)) {
       this._mergeServerChatItems(connected.chat_items as ChatItem[]);
       this._onMessage?.();
@@ -660,6 +786,10 @@ export class RemoteAgent {
     // CONNECTED — resolve ensureConnected() promise
     if (data?.type === 'CONNECTED') {
       this._supportsACPCancel = hostSupportsACPCancel(data);
+      this._sessionModes = hostSessionModeState(data);
+      if (this._sessionModes) {
+        this._applyServerMode(this._sessionModes.currentModeId);
+      }
       if (this._connectResolve) {
         if (this._connectTimer) { clearTimeout(this._connectTimer); this._connectTimer = null; }
         const resolve = this._connectResolve;
@@ -680,6 +810,11 @@ export class RemoteAgent {
       const reconnectSid = data.session_id as string;
       if (reconnectSid && this._currentSession) {
         this._currentSession.session_id = reconnectSid;
+      }
+      // Keep the Host's ACP SessionModeState above any stale mode carried by
+      // the synchronized legacy session snapshot.
+      if (this._sessionModes) {
+        this._applyServerMode(this._sessionModes.currentModeId);
       }
       this._authenticated = true;
       // If status is "connected" (idle), resolve immediately — session is alive, no events to wait for
@@ -708,6 +843,21 @@ export class RemoteAgent {
         const status = this._normalizeSessionStatus(data.status);
         for (const resolve of waiter.resolves) resolve(status);
       }
+      return;
+    }
+
+    if (data?.type === 'ACP_RESPONSE') {
+      const pending = this._pendingModeChange;
+      if (!pending || acpResponseRequestId(data) !== pending.requestId) return;
+      const response = decodeACPSetModeResponse(data);
+      if (!response || response.sessionId !== pending.sessionId) {
+        this._rejectModeChange(
+          pending,
+          new Error('Malformed or wrong-session ACP mode response'),
+        );
+        return;
+      }
+      this._resolveModeChange(pending, response);
       return;
     }
 
@@ -992,8 +1142,16 @@ export class RemoteAgent {
     this._ws = null;
     this._authenticated = false;
     this._supportsACPCancel = false;
+    this._sessionModes = null;
     this._stopPingMonitor();
     this._settleSessionStatusWaiters('not_found');
+
+    if (this._pendingModeChange) {
+      this._rejectModeChange(
+        this._pendingModeChange,
+        new Error('Connection closed before session mode acknowledgement'),
+      );
+    }
 
     // Reject pending connect
     if (this._connectReject) {
@@ -1024,6 +1182,12 @@ export class RemoteAgent {
     // socket's onclose is detached below, so nothing else would ever settle it, and
     // _ensureConnected would keep handing the stale promise to every later caller.
     this._settleConnect(new Error('Connection closed during authentication'));
+    if (this._pendingModeChange) {
+      this._rejectModeChange(
+        this._pendingModeChange,
+        new Error('Connection closed before session mode acknowledgement'),
+      );
+    }
     if (this._ws) {
       // Prevent close handler from firing during intentional close
       this._ws.onerror = null;
@@ -1034,6 +1198,7 @@ export class RemoteAgent {
     }
     this._authenticated = false;
     this._supportsACPCancel = false;
+    this._sessionModes = null;
     this._connectionState = 'disconnected';
     this._settleSessionStatusWaiters('not_found');
   }

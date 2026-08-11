@@ -37,7 +37,7 @@ function Chat({ address }: { address: string }) {
 
 | | |
 |---|---|
-| `useAgentForHuman(address, sessionId?)` | the live WebSocket conversation — `ui`, `input`, `respondToApproval`, `sendMessage`, `setMode`, `reconnect`, `reset`, `profile`, `status`, `error` |
+| `useAgentForHuman(address, sessionId?)` | the live WebSocket conversation — `ui`, `input`, `respondToApproval`, acknowledged `setSessionMode`, legacy `setMode`, `availableModes`, `modeChangePending`, `reconnect`, `reset`, `profile`, `status`, `error` |
 | `useVoiceInput(options?)` | microphone capture → transcription |
 | `isChatItemType` / `isEventType` | type guards that narrow a `ChatItem` by its `type` |
 | `fetchAgentInfo(address)` | one-shot public agent info |

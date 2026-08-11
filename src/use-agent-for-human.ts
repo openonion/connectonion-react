@@ -3,7 +3,7 @@
  *   Dependencies: imports from [react, src/react/agent-cache (acquireAgent/dropAgent), src/react/store] | imported by [src/react/index.ts]
  *   Data flow: hook gets one RemoteAgent per address:sessionId from the live-connection cache → agent.onMessage flushes ui/status/session/error into the zustand store → React re-renders from the store
  *   State/Effects: reuses the cached live RemoteAgent across session switches (agent-cache, bounded LRU) | persists session via the store | input() is fire-and-forget (errors surface via agent.error in the flush)
- *   Integration: exposes useAgentForHuman(address, options) returning {ui, status, input, reconnect, send, reset, ...}
+ *   Integration: exposes useAgentForHuman(address, options) returning {ui, status, input, setSessionMode, reconnect, send, reset, ...}
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -15,7 +15,9 @@ import {
   ApprovalMode,
   OutgoingMessage,
   ApprovalRejectMode,
+  HostSessionModeState,
   RemoteSessionStatus,
+  ServerApprovalMode,
 } from './connect';
 import { acquireAgent, dropAgent } from './agent-cache';
 import { getStore, type Message } from './store';
@@ -85,6 +87,12 @@ export interface UseAgentForHumanReturn {
   /** Current approval mode. Defaults to 'safe' when no session exists yet. */
   mode: ApprovalMode;
 
+  /** Server-authorized ACP modes advertised for this authenticated session. */
+  availableModes: ReadonlyArray<HostSessionModeState['availableModes'][number]>;
+
+  /** True while one acknowledged ACP session mode transaction is outstanding. */
+  modeChangePending: boolean;
+
   /** Maximum turns before ULW mode pauses. null when mode is not 'ulw'. */
   ulwTurns: number | null;
 
@@ -138,8 +146,13 @@ export interface UseAgentForHumanReturn {
    *
    * @param mode - Target approval mode
    * @param options.turns - Initial turn budget when switching to 'ulw' (default 100)
+   * @deprecated Use setSessionMode for acknowledged server policy. This legacy
+   * compatibility operation can also carry the product-only plan alias.
    */
   setMode: (mode: ApprovalMode, options?: { turns?: number }) => void;
+
+  /** Persist one server policy mode and resolve only after the Host confirms it. */
+  setSessionMode: (mode: ServerApprovalMode) => Promise<void>;
 
   /** Reconnect to existing session to receive pending output */
   reconnect: () => void;
@@ -226,6 +239,13 @@ export function useAgentForHuman(
   // already holds it and a cold one fills it in on the next flush.
   const [profile, setProfile] = useState<AgentInfo | null>(agent.profile);
 
+  const [availableModes, setAvailableModes] = useState(
+    () => [...agent.availableModes],
+  );
+  const [modeChangePending, setModeChangePending] = useState(
+    agent.modeChangePending,
+  );
+
   // Register a single onMessage callback for the lifetime of this agent instance.
   // This replaces a polling interval: every streaming event from the server triggers
   // one synchronous flush of all derived state into React/Zustand.
@@ -236,6 +256,8 @@ export function useAgentForHuman(
       setConnectionState(agent.connectionState);
       setDashboardHtml(agent.dashboardHtml);
       setProfile(agent.profile);
+      setAvailableModes([...agent.availableModes]);
+      setModeChangePending(agent.modeChangePending);
       if (agent.error) setError(agent.error);
       if (agent.currentSession) {
         setSession(agent.currentSession);
@@ -394,6 +416,12 @@ export function useAgentForHuman(
     );
   };
 
+  const setSessionMode = async (newMode: ServerApprovalMode) => {
+    setError(null);
+    await agent.setSessionMode(newMode);
+    setError(null);
+  };
+
   return {
     status,
     connectionState,
@@ -405,6 +433,8 @@ export function useAgentForHuman(
     profile,
     checkSessionStatus: (sid: string) => agent.checkSessionStatus(sid),
     mode: session?.mode || 'safe',
+    availableModes,
+    modeChangePending,
     ulwTurns: session?.ulw_turns ?? null,
     ulwTurnsUsed: session?.ulw_turns_used ?? null,
     input,
@@ -414,6 +444,7 @@ export function useAgentForHuman(
     interrupt,
     signOnboard: (options: { inviteCode?: string; payment?: number }) => agent.signOnboard(options),
     setMode,
+    setSessionMode,
     reconnect,
     reset,
   };

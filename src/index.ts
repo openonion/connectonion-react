@@ -14,7 +14,9 @@ export type {
   OutgoingMessage,
   ACPNotificationFrame,
   ACPPermissionRequest,
+  HostSessionModeState,
   ApprovalRejectMode,
+  ServerApprovalMode,
 } from './connect';
 
 export { fetchAgentInfo } from './connect';

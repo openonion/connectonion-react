@@ -5,8 +5,11 @@ import type {
   PermissionOption,
   RequestPermissionRequest,
   RequestPermissionResponse,
+  SessionMode,
   SessionNotification,
   SessionUpdate,
+  SetSessionModeRequest,
+  SetSessionModeResponse,
   ToolCallStatus,
 } from '@agentclientprotocol/sdk';
 import type { ApprovalMode } from './types';
@@ -52,6 +55,27 @@ export interface ACPModeUpdate {
   mode: ServerApprovalMode;
 }
 
+export interface HostSessionModeState {
+  currentModeId: ServerApprovalMode;
+  availableModes: SessionMode[];
+}
+
+export type ACPSetModeResponse =
+  | {
+    requestId: string;
+    sessionId: string;
+    result: SetSessionModeResponse;
+  }
+  | {
+    requestId: string;
+    sessionId: string;
+    error: {
+      code: number;
+      message: string;
+      data?: unknown;
+    };
+  };
+
 export type ApprovalRejectMode =
   | 'reject_soft'
   | 'reject_hard'
@@ -67,6 +91,45 @@ export function hostSupportsACPCancel(
     && acp.client_notifications.includes('session/cancel');
 }
 
+/** Parse the exact mode state attached to an advertised Host transaction. */
+export function hostSessionModeState(
+  connected: Record<string, unknown>,
+): HostSessionModeState | null {
+  const capabilities = record(connected.carrier_capabilities);
+  const acp = record(capabilities?.acp);
+  if (
+    acp?.schema !== ACP_SCHEMA_VERSION
+    || !Array.isArray(acp.client_requests)
+    || !acp.client_requests.includes('session/set_mode')
+  ) return null;
+
+  const state = record(connected.session_modes);
+  const currentModeId = parseServerApprovalMode(state?.currentModeId);
+  if (!currentModeId || !Array.isArray(state?.availableModes)) return null;
+
+  const availableModes: SessionMode[] = [];
+  const seen = new Set<ServerApprovalMode>();
+  for (const candidate of state.availableModes) {
+    const mode = record(candidate);
+    const id = parseServerApprovalMode(mode?.id);
+    if (!id || seen.has(id) || !nonEmpty(mode?.name)) return null;
+    if (
+      mode?.description != null
+      && typeof mode.description !== 'string'
+    ) return null;
+    seen.add(id);
+    availableModes.push({
+      id,
+      name: mode.name,
+      ...(typeof mode.description === 'string'
+        ? { description: mode.description }
+        : {}),
+    });
+  }
+  if (!seen.has(currentModeId)) return null;
+  return { currentModeId, availableModes };
+}
+
 export function acpCancelFrame(sessionId: string): Record<string, unknown> {
   const params: CancelNotification = { sessionId };
   return {
@@ -78,6 +141,86 @@ export function acpCancelFrame(sessionId: string): Record<string, unknown> {
       params,
     },
   };
+}
+
+export function acpSetSessionModeFrame(
+  requestId: string,
+  sessionId: string,
+  modeId: ServerApprovalMode,
+): Record<string, unknown> {
+  const params: SetSessionModeRequest = { sessionId, modeId };
+  return {
+    type: 'ACP_REQUEST',
+    acpSchema: ACP_SCHEMA_VERSION,
+    message: {
+      jsonrpc: '2.0',
+      id: requestId,
+      method: 'session/set_mode',
+      params,
+    },
+  };
+}
+
+/** Return a response only when the complete owned JSON-RPC shape is valid. */
+export function decodeACPSetModeResponse(
+  frame: unknown,
+): ACPSetModeResponse | null {
+  const carrier = record(frame);
+  if (
+    carrier?.type !== 'ACP_RESPONSE'
+    || carrier.acpSchema !== ACP_SCHEMA_VERSION
+    || !nonEmpty(carrier.sessionId)
+  ) return null;
+  const message = record(carrier.message);
+  if (message?.jsonrpc !== '2.0' || !nonEmpty(message.id)) return null;
+
+  const hasResult = Object.prototype.hasOwnProperty.call(message, 'result');
+  const hasError = Object.prototype.hasOwnProperty.call(message, 'error');
+  if (hasResult === hasError) return null;
+  const allowedMessageKeys = new Set([
+    'jsonrpc', 'id', hasResult ? 'result' : 'error',
+  ]);
+  if (Object.keys(message).some((key) => !allowedMessageKeys.has(key))) {
+    return null;
+  }
+  if (hasResult) {
+    const result = record(message.result);
+    if (!result || Object.keys(result).some((key) => key !== '_meta')) {
+      return null;
+    }
+    if (result._meta != null && !record(result._meta)) return null;
+    return {
+      requestId: message.id,
+      sessionId: carrier.sessionId,
+      result: result as SetSessionModeResponse,
+    };
+  }
+
+  const error = record(message.error);
+  if (
+    !error
+    || !Number.isInteger(error.code)
+    || !nonEmpty(error.message)
+  ) return null;
+  return {
+    requestId: message.id,
+    sessionId: carrier.sessionId,
+    error: {
+      code: error.code as number,
+      message: error.message,
+      ...(Object.prototype.hasOwnProperty.call(error, 'data')
+        ? { data: error.data }
+        : {}),
+    },
+  };
+}
+
+/** Extract only correlation identity so malformed owned responses fail fast. */
+export function acpResponseRequestId(frame: unknown): string | null {
+  const carrier = record(frame);
+  if (carrier?.type !== 'ACP_RESPONSE') return null;
+  const message = record(carrier.message);
+  return nonEmpty(message?.id) ? message.id : null;
 }
 
 export function decodeACPPermissionRequest(
