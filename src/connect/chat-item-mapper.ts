@@ -6,35 +6,73 @@
  *   Integration: called by handlers.ts for stream event types (tool_call, llm_call, etc.)
  */
 import { ChatItem, ChatItemType } from './types';
+import { decodeIncomingEvent } from './wire-events';
+
+const SUCCESSFUL_TOOL_RESULTS = new Set(['success', 'done', 'completed']);
+const RUNNING_TOOL_STATUSES = new Set(['pending', 'running', 'in_progress']);
+
+function toolResultStatus(status: unknown): 'done' | 'error' {
+  return typeof status === 'string' && SUCCESSFUL_TOOL_RESULTS.has(status)
+    ? 'done'
+    : 'error';
+}
+
+function toolStartStatus(status: unknown): 'running' | 'error' {
+  if (status === undefined || RUNNING_TOOL_STATUSES.has(String(status))) {
+    return 'running';
+  }
+  return 'error';
+}
 
 export function mapEventToChatItem(
   chatItems: ChatItem[],
   event: Record<string, unknown>,
   addItem: (item: Partial<ChatItem> & { type: ChatItemType }) => void,
 ): void {
-  switch (event.type as string) {
+  const decoded = decodeIncomingEvent(event);
+  if (!decoded) return;
+
+  switch (decoded.type as string) {
     case 'tool_call': {
-      const toolId = (event.tool_id || event.id) as string;
+      const toolId = (decoded.tool_id || decoded.id) as string;
+      const existing = chatItems.find(
+        (item): item is ChatItem & { type: 'tool_call' } =>
+          item.type === 'tool_call' && item.id === toolId
+      );
+      if (existing) {
+        existing.name = decoded.name as string;
+        existing.args = decoded.args as Record<string, unknown>;
+        existing.status = toolStartStatus(decoded.status);
+        break;
+      }
       addItem({
         type: 'tool_call',
         id: toolId,
-        name: event.name as string,
-        args: event.args as Record<string, unknown>,
-        status: 'running',
+        name: decoded.name as string,
+        args: decoded.args as Record<string, unknown>,
+        status: toolStartStatus(decoded.status),
       });
       break;
     }
 
-    case 'tool_result': {
-      const toolId = (event.tool_id || event.id) as string;
+    case 'tool_call_update': {
+      const toolId = (decoded.tool_id || decoded.id) as string;
       const existing = chatItems.find(
         (e): e is ChatItem & { type: 'tool_call' } => e.type === 'tool_call' && e.id === toolId
       );
       if (existing) {
-        existing.status = event.status === 'error' ? 'error' : 'done';
-        existing.result = event.result as string;
-        if (typeof event.timing_ms === 'number') {
-          existing.timing_ms = event.timing_ms;
+        if (decoded.status !== undefined) {
+          existing.status = RUNNING_TOOL_STATUSES.has(String(decoded.status))
+            ? 'running'
+            : toolResultStatus(decoded.status);
+        }
+        if (typeof decoded.name === 'string') existing.name = decoded.name;
+        if (decoded.args && typeof decoded.args === 'object') {
+          existing.args = decoded.args as Record<string, unknown>;
+        }
+        if (typeof decoded.result === 'string') existing.result = decoded.result;
+        if (typeof decoded.timing_ms === 'number') {
+          existing.timing_ms = decoded.timing_ms;
         }
       }
       break;

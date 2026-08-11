@@ -12,6 +12,7 @@ export type {
   SkillInfo,
   ApprovalMode,
   OutgoingMessage,
+  ACPNotificationFrame,
 } from './connect';
 
 export { fetchAgentInfo } from './connect';
