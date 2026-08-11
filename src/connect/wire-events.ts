@@ -37,11 +37,22 @@ function decodeACPFrame(
   if (message?.jsonrpc !== '2.0' || message.method !== 'session/update') return null;
   const params = record(message.params);
   const update = record(params?.update);
-  if (typeof params?.sessionId !== 'string' || !update) return null;
-  return decodeACPUpdate(update as SessionUpdate);
+  if (!nonEmpty(params?.sessionId) || !update) return null;
+  const decoded = decodeACPUpdate(update as SessionUpdate);
+  return decoded ? { ...decoded, _acp_session_id: params.sessionId } : null;
 }
 
 function decodeACPUpdate(update: SessionUpdate): Record<string, unknown> | null {
+  if (update.sessionUpdate === 'agent_message_chunk') {
+    if (!nonEmpty(update.messageId)) return null;
+    const content = record(update.content);
+    if (content?.type !== 'text' || !nonEmpty(content.text)) return null;
+    return {
+      type: 'assistant',
+      id: update.messageId,
+      content: content.text,
+    };
+  }
   if (update.sessionUpdate === 'tool_call') {
     if (!nonEmpty(update.toolCallId) || !nonEmpty(update.title)) return null;
     if (update.status != null && !TOOL_STATUSES.has(String(update.status))) return null;
