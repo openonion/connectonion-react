@@ -28,9 +28,14 @@ export function mapEventToChatItem(
   chatItems: ChatItem[],
   event: Record<string, unknown>,
   addItem: (item: Partial<ChatItem> & { type: ChatItemType }) => void,
-): void {
+  activeSessionId?: string,
+): boolean {
   const decoded = decodeIncomingEvent(event);
-  if (!decoded) return;
+  if (!decoded) return false;
+  if (
+    event.type === 'ACP_NOTIFICATION'
+    && decoded._acp_session_id !== activeSessionId
+  ) return false;
 
   switch (decoded.type as string) {
     case 'tool_call': {
@@ -121,11 +126,11 @@ export function mapEventToChatItem(
     }
 
     case 'assistant': {
-      if (event.content) {
+      if (decoded.content) {
         addItem({
           type: 'agent',
-          id: event.id != null ? String(event.id) : undefined,
-          content: event.content as string,
+          id: decoded.id != null ? String(decoded.id) : undefined,
+          content: decoded.content as string,
         });
       }
       break;
@@ -252,4 +257,5 @@ export function mapEventToChatItem(
       break;
     }
   }
+  return true;
 }

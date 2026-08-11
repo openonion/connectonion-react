@@ -628,9 +628,14 @@ export class RemoteAgent {
         data?.type === 'agent_image' ||
         data?.type === 'intent' || data?.type === 'eval' || data?.type === 'compact' ||
         data?.type === 'tool_blocked' || data?.type === 'files_received') {
-      this._clearPlaceholder();
-      mapEventToChatItem(this._chatItems, data, (item) => this._addChatItem(item));
-      if (data.session) {
+      const accepted = mapEventToChatItem(
+        this._chatItems,
+        data,
+        (item) => this._addChatItem(item),
+        this._currentSession?.session_id,
+      );
+      if (accepted) this._clearPlaceholder();
+      if (accepted && data.session) {
         this._currentSession = data.session;
       }
     }

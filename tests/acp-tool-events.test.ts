@@ -5,7 +5,12 @@ import fixture from './fixtures/acp_tool_events.json';
 function mapToolEvents(events: Record<string, unknown>[]): ChatItem[] {
   const items: ChatItem[] = [];
   for (const event of events) {
-    mapEventToChatItem(items, event, (item) => items.push(item as ChatItem));
+    mapEventToChatItem(
+      items,
+      event,
+      (item) => items.push(item as ChatItem),
+      'session-1',
+    );
   }
   return items;
 }
