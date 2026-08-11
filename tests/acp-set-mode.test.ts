@@ -86,6 +86,22 @@ describe('Host ACP session mode capability', () => {
     });
   });
 
+  test('keeps advertised mode authoritative over a stale reconnect snapshot', () => {
+    const frame = {
+      ...connected('safe'),
+      server_newer: true,
+      session: {
+        session_id: SESSION_ID,
+        mode: 'accept_edits',
+        messages: [],
+      },
+    };
+
+    const { agent } = harness(frame);
+
+    expect(agent.mode).toBe('safe');
+  });
+
   test.each([
     ['missing request capability', {
       ...connected(), carrier_capabilities: { acp: { schema: 'schema-v1.19.0' } },

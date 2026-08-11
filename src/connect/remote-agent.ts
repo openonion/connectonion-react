@@ -755,6 +755,12 @@ export class RemoteAgent {
     if (connected.server_newer && connected.session) {
       this._currentSession = connected.session as SessionState;
     }
+    // CONNECTED capability state is authoritative. A server_newer session can
+    // still contain the pre-transaction mode, so reapply the advertised value
+    // after accepting the durable conversation snapshot.
+    if (this._sessionModes) {
+      this._applyServerMode(this._sessionModes.currentModeId);
+    }
     if (connected.server_newer && connected.chat_items && Array.isArray(connected.chat_items)) {
       this._mergeServerChatItems(connected.chat_items as ChatItem[]);
       this._onMessage?.();
@@ -804,6 +810,11 @@ export class RemoteAgent {
       const reconnectSid = data.session_id as string;
       if (reconnectSid && this._currentSession) {
         this._currentSession.session_id = reconnectSid;
+      }
+      // Keep the Host's ACP SessionModeState above any stale mode carried by
+      // the synchronized legacy session snapshot.
+      if (this._sessionModes) {
+        this._applyServerMode(this._sessionModes.currentModeId);
       }
       this._authenticated = true;
       // If status is "connected" (idle), resolve immediately — session is alive, no events to wait for

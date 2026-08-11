@@ -311,6 +311,12 @@ describe('useAgentForHuman hook', () => {
               type: 'CONNECTED',
               session_id: 'mode-write-session',
               status: 'new',
+              server_newer: true,
+              session: {
+                session_id: 'mode-write-session',
+                mode: 'accept_edits',
+                messages: [],
+              },
               carrier_capabilities: {
                 acp: {
                   schema: 'schema-v1.19.0',
@@ -353,6 +359,7 @@ describe('useAgentForHuman hook', () => {
       expect(result.current.availableModes.map((mode) => mode.id)).toEqual([
         'safe', 'accept_edits',
       ]);
+      expect(result.current.mode).toBe('safe');
 
       let change!: Promise<void>;
       await act(async () => {
