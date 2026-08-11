@@ -48,6 +48,24 @@ import {
 } from './endpoint';
 import { ensureKeys, signPayload } from './auth';
 import { mapEventToChatItem } from './chat-item-mapper';
+import {
+  ACPPermissionRequest,
+  ApprovalRejectMode,
+  acpPermissionResponseFrame,
+  decodeACPPermissionRequest,
+} from './wire-events';
+
+interface PendingApproval {
+  chatItemId: string;
+  answered: boolean;
+  acp?: ACPPermissionRequest;
+}
+
+function approvalRejectMode(value: unknown): ApprovalRejectMode {
+  return value === 'reject_soft' || value === 'reject_explain'
+    ? value
+    : 'reject_hard';
+}
 
 export class RemoteAgent {
   readonly address: string;
@@ -106,6 +124,7 @@ export class RemoteAgent {
   // promise and leaking the first socket and its ping monitor. Cleared when the
   // attempt settles so a failed connect can be retried.
   private _connecting: Promise<void> | null = null;
+  private _pendingApproval: PendingApproval | null = null;
 
   _onMessage: (() => void) | null = null;
   set onMessage(fn: (() => void) | null) { this._onMessage = fn; }
@@ -258,6 +277,15 @@ export class RemoteAgent {
   }
 
   send(message: Record<string, unknown>): void {
+    if (message.type === 'APPROVAL_RESPONSE') {
+      this.respondToApproval(
+        message.approved === true,
+        message.scope === 'session' ? 'session' : 'once',
+        approvalRejectMode(message.mode),
+        typeof message.feedback === 'string' ? message.feedback : undefined,
+      );
+      return;
+    }
     if (!this._ws) throw new Error('No active connection');
     this._ws.send(JSON.stringify(message));
     if (message.type === 'ASK_USER_RESPONSE') {
@@ -280,6 +308,39 @@ export class RemoteAgent {
       this._status = 'working';
       this._onMessage?.();
     }
+  }
+
+  respondToApproval(
+    approved: boolean,
+    scope: 'once' | 'session',
+    mode: ApprovalRejectMode = 'reject_hard',
+    feedback?: string,
+  ): void {
+    const pending = this._pendingApproval;
+    if (!pending || pending.answered) return;
+    if (!this._ws) throw new Error('No active connection');
+    pending.answered = true;
+    const item = this._chatItems.find(
+      (candidate) => candidate.id === pending.chatItemId
+        && candidate.type === 'approval_needed',
+    );
+    if (item?.type === 'approval_needed') item.answered = true;
+
+    const rejectionMode = approvalRejectMode(mode);
+    const response = pending.acp
+      ? acpPermissionResponseFrame(
+        pending.acp, approved, scope, rejectionMode, feedback,
+      )
+      : {
+        type: 'APPROVAL_RESPONSE',
+        approved,
+        scope,
+        ...(!approved && { mode: rejectionMode }),
+        ...(!approved && feedback && { feedback }),
+      };
+    this._ws.send(JSON.stringify(response));
+    this._status = 'working';
+    this._onMessage?.();
   }
 
   setMode(mode: ApprovalMode, options?: { turns?: number }): void {
@@ -306,6 +367,7 @@ export class RemoteAgent {
     this._status = 'idle';
     this._connectionState = 'disconnected';
     this._error = null;
+    this._pendingApproval = null;
     this._settleInput();
     this._settleSessionStatusWaiters('not_found');
   }
@@ -654,10 +716,54 @@ export class RemoteAgent {
       });
     }
 
+    if (data?.type === 'ACP_REQUEST') {
+      const request = decodeACPPermissionRequest(data);
+      if (request && request.sessionId === this._currentSession?.session_id) {
+        const current = this._pendingApproval;
+        const sameRequest = current?.acp?.requestId === request.requestId;
+        if (sameRequest && current.answered) {
+          // A reconnect may replay the request after the user's decision left
+          // this process. Keep the card answered and never send it twice.
+        } else if (!current || current.answered || sameRequest) {
+          this._pendingApproval = {
+            chatItemId: request.toolCallId,
+            answered: false,
+            acp: request,
+          };
+          this._status = 'waiting';
+          this._addChatItem({
+            type: 'approval_needed',
+            id: request.toolCallId,
+            tool: request.title,
+            arguments: request.rawInput,
+          });
+        }
+      }
+    }
+
     if (data?.type === 'approval_needed') {
+      const toolCallId = typeof data.tool_call_id === 'string'
+        ? data.tool_call_id
+        : undefined;
+      const requestId = typeof data.id === 'string' ? data.id : undefined;
+      const current = this._pendingApproval;
+      const isACPPair = current?.acp && (
+        current.acp?.toolCallId === toolCallId
+        || current.acp?.requestId === requestId
+      );
+      const chatItemId = isACPPair
+        ? current.chatItemId
+        : toolCallId || requestId || generateUUID();
+      if (!isACPPair) {
+        this._pendingApproval = {
+          chatItemId,
+          answered: false,
+        };
+      }
       this._status = 'waiting';
       this._addChatItem({
         type: 'approval_needed',
+        id: chatItemId,
         tool: data.tool as string,
         arguments: data.arguments as Record<string, unknown>,
         ...(data.description && { description: data.description as string }),
@@ -730,6 +836,7 @@ export class RemoteAgent {
     if (data?.type === 'OUTPUT') {
       this._clearPlaceholder();
       this._status = 'idle';
+      this._pendingApproval = null;
 
       if (data.session) {
         this._currentSession = data.session;

@@ -95,6 +95,37 @@ The `ui` array contains events for rendering the conversation. Each event has:
 | `thinking` | Thinking indicator | - |
 | `tool_call` | Tool execution | `name`, `args`, `status`, `result` |
 | `ask_user` | Agent question | `text: string` |
+| `approval_needed` | Tool requires a decision | `tool`, `arguments`, `description?`, `answered?` |
+
+### Tool approvals
+
+Render one approval item and answer it through the hook. The React package owns
+ACP request IDs, Host session correlation, legacy fallback, and duplicate
+suppression; components should not construct protocol frames.
+
+```tsx
+const { ui, respondToApproval } = useAgentForHuman(address, { sessionId });
+const approval = ui.find(item =>
+  item.type === 'approval_needed' && !item.answered
+);
+
+if (approval) {
+  return (
+    <>
+      <button onClick={() => respondToApproval(true, 'once')}>Allow once</button>
+      <button onClick={() => respondToApproval(true, 'session')}>Allow session</button>
+      <button onClick={() => respondToApproval(false, 'once', 'reject_hard')}>
+        Reject
+      </button>
+    </>
+  );
+}
+```
+
+`reject_soft`, `reject_hard`, and `reject_explain` are the supported rejection
+modes. An optional fourth argument carries explanatory feedback on a rejection.
+Calling the method twice for the same card sends only one response, including
+after a reconnect replay.
 
 ### Tool Call Status
 

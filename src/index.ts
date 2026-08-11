@@ -13,6 +13,8 @@ export type {
   ApprovalMode,
   OutgoingMessage,
   ACPNotificationFrame,
+  ACPPermissionRequest,
+  ApprovalRejectMode,
 } from './connect';
 
 export { fetchAgentInfo } from './connect';

@@ -14,6 +14,7 @@ import {
   SessionState,
   ApprovalMode,
   OutgoingMessage,
+  ApprovalRejectMode,
   RemoteSessionStatus,
 } from './connect';
 import { acquireAgent, dropAgent } from './agent-cache';
@@ -115,6 +116,14 @@ export interface UseAgentForHumanReturn {
    * PLAN_REVIEW_RESPONSE, ULW_RESPONSE, etc.
    */
   sendMessage: (message: OutgoingMessage) => void;
+
+  /** Answer the one currently pending tool approval through ACP or legacy Host. */
+  respondToApproval: (
+    approved: boolean,
+    scope: 'once' | 'session',
+    mode?: ApprovalRejectMode,
+    feedback?: string,
+  ) => void;
 
   /** Sign an onboard payload (requires private keys). Pass result to sendMessage(). */
   signOnboard: (options: { inviteCode?: string; payment?: number }) => OutgoingMessage;
@@ -351,6 +360,13 @@ export function useAgentForHuman(
     agent.send(message);
   };
 
+  const respondToApproval = (
+    approved: boolean,
+    scope: 'once' | 'session',
+    mode?: ApprovalRejectMode,
+    feedback?: string,
+  ) => agent.respondToApproval(approved, scope, mode, feedback);
+
   const setMode = (newMode: ApprovalMode, options?: { turns?: number }) => {
     agent.setMode(newMode, options);
     // Mirror the mode change into the Zustand store immediately so the UI reflects it
@@ -383,6 +399,7 @@ export function useAgentForHuman(
     input,
     connect,
     sendMessage,
+    respondToApproval,
     signOnboard: (options: { inviteCode?: string; payment?: number }) => agent.signOnboard(options),
     setMode,
     reconnect,
