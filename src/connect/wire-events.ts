@@ -1,9 +1,23 @@
 /** ACP v1.19 compatibility decoding for the ConnectOnion WebSocket carrier. */
 
-import type { SessionNotification, SessionUpdate } from '@agentclientprotocol/sdk';
+import type {
+  PermissionOption,
+  RequestPermissionRequest,
+  RequestPermissionResponse,
+  SessionNotification,
+  SessionUpdate,
+  ToolCallStatus,
+} from '@agentclientprotocol/sdk';
 
 const ACP_SCHEMA_VERSION = 'schema-v1.19.0';
 const TOOL_STATUSES = new Set(['pending', 'in_progress', 'completed', 'failed']);
+const HOST_PERMISSION_KINDS = new Map<string, PermissionOption['kind']>([
+  ['allow_once', 'allow_once'],
+  ['allow_session', 'allow_always'],
+  ['reject_soft', 'reject_once'],
+  ['reject_hard', 'reject_once'],
+  ['reject_explain', 'reject_once'],
+]);
 
 export interface ACPNotificationFrame {
   type: 'ACP_NOTIFICATION';
@@ -12,6 +26,97 @@ export interface ACPNotificationFrame {
     jsonrpc: '2.0';
     method: 'session/update';
     params: SessionNotification;
+  };
+}
+
+export interface ACPPermissionRequest {
+  requestId: string;
+  sessionId: string;
+  toolCallId: string;
+  title: string;
+  rawInput: Record<string, unknown>;
+  options: PermissionOption[];
+}
+
+export type ApprovalRejectMode =
+  | 'reject_soft'
+  | 'reject_hard'
+  | 'reject_explain';
+
+export function decodeACPPermissionRequest(
+  frame: Record<string, unknown>,
+): ACPPermissionRequest | null {
+  if (
+    frame.type !== 'ACP_REQUEST'
+    || frame.acpSchema !== ACP_SCHEMA_VERSION
+  ) return null;
+  const message = record(frame.message);
+  if (
+    message?.jsonrpc !== '2.0'
+    || message.method !== 'session/request_permission'
+    || !nonEmpty(message.id)
+  ) return null;
+  const params = record(message.params);
+  const toolCall = record(params?.toolCall);
+  if (
+    !nonEmpty(params?.sessionId)
+    || !toolCall
+    || !nonEmpty(toolCall.toolCallId)
+    || !nonEmpty(toolCall.title)
+  ) return null;
+  const rawInput = record(toolCall.rawInput);
+  const options = permissionOptions(params.options);
+  const status = toolStatus(toolCall.status);
+  if (!rawInput || !options?.length || status !== 'pending') return null;
+
+  const request: RequestPermissionRequest = {
+    sessionId: params.sessionId,
+    toolCall: {
+      toolCallId: toolCall.toolCallId,
+      title: toolCall.title,
+      status,
+      rawInput,
+    },
+    options,
+  };
+  return {
+    requestId: message.id,
+    sessionId: request.sessionId,
+    toolCallId: request.toolCall.toolCallId,
+    title: request.toolCall.title!,
+    rawInput,
+    options,
+  };
+}
+
+export function acpPermissionResponseFrame(
+  request: ACPPermissionRequest,
+  approved: boolean,
+  scope: 'once' | 'session',
+  mode: ApprovalRejectMode = 'reject_hard',
+  feedback?: string,
+): Record<string, unknown> {
+  const optionId = approved
+    ? scope === 'session' ? 'allow_session' : 'allow_once'
+    : mode;
+  const advertised = request.options.some(
+    (option) => option.optionId === optionId,
+  );
+  const result: RequestPermissionResponse = advertised
+    ? { outcome: { outcome: 'selected', optionId } }
+    : { outcome: { outcome: 'cancelled' } };
+  if (!approved && advertised && feedback) {
+    result._meta = { connectonion: { feedback } };
+  }
+  return {
+    type: 'ACP_RESPONSE',
+    acpSchema: ACP_SCHEMA_VERSION,
+    sessionId: request.sessionId,
+    message: {
+      jsonrpc: '2.0',
+      id: request.requestId,
+      result,
+    },
   };
 }
 
@@ -100,4 +205,33 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 function nonEmpty(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
+}
+
+function permissionOptions(value: unknown): PermissionOption[] | null {
+  if (!Array.isArray(value)) return null;
+  const options: PermissionOption[] = [];
+  const seen = new Set<string>();
+  for (const candidate of value) {
+    const option = record(candidate);
+    if (!option) return null;
+
+    const optionId = option.optionId;
+    if (!nonEmpty(optionId) || !nonEmpty(option.name)) return null;
+
+    const expectedKind = HOST_PERMISSION_KINDS.get(optionId);
+    if (!expectedKind || option.kind !== expectedKind || seen.has(optionId)) return null;
+    seen.add(optionId);
+    options.push({
+      optionId,
+      name: option.name,
+      kind: expectedKind,
+    });
+  }
+  return options;
+}
+
+function toolStatus(value: unknown): ToolCallStatus | null {
+  return typeof value === 'string' && TOOL_STATUSES.has(value)
+    ? value as ToolCallStatus
+    : null;
 }

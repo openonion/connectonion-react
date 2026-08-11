@@ -37,7 +37,7 @@ function Chat({ address }: { address: string }) {
 
 | | |
 |---|---|
-| `useAgentForHuman(address, sessionId?)` | the live WebSocket conversation — `ui`, `input`, `sendMessage`, `setMode`, `reconnect`, `reset`, `profile`, `status`, `error` |
+| `useAgentForHuman(address, sessionId?)` | the live WebSocket conversation — `ui`, `input`, `respondToApproval`, `sendMessage`, `setMode`, `reconnect`, `reset`, `profile`, `status`, `error` |
 | `useVoiceInput(options?)` | microphone capture → transcription |
 | `isChatItemType` / `isEventType` | type guards that narrow a `ChatItem` by its `type` |
 | `fetchAgentInfo(address)` | one-shot public agent info |
@@ -65,6 +65,14 @@ sessions carry over. `connectonion/react` worked through the 0.2.x line and was 
 `connectonion@0.3.0`.
 
 Full hook surface: [`docs/react.md`](docs/react.md).
+
+## Tool approvals
+
+`respondToApproval(approved, scope, mode?, feedback?)` answers the one pending
+approval. The SDK owns ACP request correlation, legacy fallback, and duplicate
+suppression; React applications should not build `ACP_RESPONSE` frames or keep
+JSON-RPC request IDs in component state. During a rolling upgrade, paired ACP
+and legacy Host requests render as one normalized `approval_needed` item.
 
 ## Development
 

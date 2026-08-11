@@ -9,7 +9,11 @@ import { ConnectOptions } from './types';
 import { RemoteAgent } from './remote-agent';
 
 export * from './types';
-export type { ACPNotificationFrame } from './wire-events';
+export type {
+  ACPNotificationFrame,
+  ACPPermissionRequest,
+  ApprovalRejectMode,
+} from './wire-events';
 export { fetchAgentInfo } from './endpoint';
 export { RemoteAgent } from './remote-agent';
 
