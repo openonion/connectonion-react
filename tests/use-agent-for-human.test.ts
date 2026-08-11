@@ -242,6 +242,56 @@ describe('useAgentForHuman hook', () => {
       expect(result.current.status).toBe('idle');
       expect(result.current.isProcessing).toBe(false);
     });
+
+    it('surfaces an authoritative ACP mode update to hook consumers', async () => {
+      class ModeWS extends MockWebSocket {
+        override send(data: unknown): void {
+          const msg = JSON.parse(String(data));
+          if (msg.type !== 'INPUT') {
+            super.send(data);
+            return;
+          }
+          const frame = {
+            type: 'ACP_NOTIFICATION',
+            acpSchema: 'schema-v1.19.0',
+            message: {
+              jsonrpc: '2.0',
+              method: 'session/update',
+              params: {
+                sessionId: 'mode-session',
+                update: {
+                  sessionUpdate: 'current_mode_update',
+                  currentModeId: 'accept_edits',
+                },
+              },
+            },
+          };
+          setTimeout(() => this.onmessage?.({ data: JSON.stringify(frame) }), 0);
+          setTimeout(() => this.onmessage?.({
+            data: JSON.stringify({ type: 'mode_changed', mode: 'accept_edits' }),
+          }), 1);
+          setTimeout(() => this.onmessage?.({
+            data: JSON.stringify({
+              type: 'OUTPUT',
+              input_id: msg.input_id,
+              result: 'done',
+            }),
+          }), 5);
+        }
+      }
+      ActiveWS = ModeWS;
+      const addr = uniqueAddr();
+      const { result } = renderHook(() =>
+        useAgentForHuman(addr, 'mode-session')
+      );
+
+      await act(async () => {
+        result.current.input('Use Auto mode');
+        await flush();
+      });
+
+      expect(result.current.mode).toBe('accept_edits');
+    });
   });
 
   describe('reset method', () => {
