@@ -175,6 +175,22 @@ describe('RemoteAgent plan session state', () => {
     expect(agent.plan).toEqual([]);
   });
 
+  it('preserves the plan through a same-session reconnect snapshot', () => {
+    const agent = activeAgent();
+    deliver(agent, fixture.acp[0] as Record<string, unknown>);
+
+    deliver(agent, {
+      type: 'CONNECTED',
+      status: 'connected',
+      server_newer: true,
+      session_id: 'session-1',
+      session: { session_id: 'session-1', turn: 8 },
+    });
+
+    expect(agent.plan).toEqual(expected);
+    expect(agent.currentSession?.turn).toBe(8);
+  });
+
   it('keeps interactive plan_review independent from observational plan state', () => {
     const agent = activeAgent();
     deliver(agent, fixture.acp[0] as Record<string, unknown>);

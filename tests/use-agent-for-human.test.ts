@@ -238,6 +238,9 @@ describe('useAgentForHuman hook', () => {
         status: 'in_progress',
       }]);
       expect(result.current.ui).toEqual([]);
+      expect(Object.values(mockStorage).some(
+        (value) => value.includes('Render the plan'),
+      )).toBe(true);
     });
   });
 
