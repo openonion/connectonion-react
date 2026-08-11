@@ -52,7 +52,7 @@ const {
   reset,          // () => void - start fresh
   isProcessing,   // boolean - true when status !== 'idle'
   error,          // Error | null - last error
-  respond,        // (answer: string | string[]) => void - answer ask_user
+  sendMessage,    // (message: OutgoingMessage) => void - answer ask_user, etc.
   respondToApproval, // (approved: boolean, ...) => void
   connect,        // () => void - open the socket without sending input
   dashboardHtml,  // string | null - the agent's Home page, if it has one
@@ -214,28 +214,36 @@ reactive results. The low-level agent returned by `connect()` instead resolves a
 
 ```tsx
 interface Response {
-  text: string;  // Agent's response or question
-  done: boolean; // true = complete, false = needs more input
+  text: string;  // Final agent response
+  done: boolean; // true for final OUTPUT; ask_user does not resolve input()
 }
 ```
 
 ### Handling Follow-up Questions
 
-When `done: false`, the agent is asking for more information:
+An `ask_user` event pauses the run without resolving `input()`. Observe the
+low-level agent's reactive state, send the answer on the same connection, and
+then await the original promise for the final response:
 
 ```tsx
 import { connect } from '@connectonion/react/connect'
 
 const agent = connect(address)
+agent.onMessage = () => {
+  const question = [...agent.ui].reverse().find(
+    item => item.type === 'ask_user' && !item.answered
+  )
+  if (question?.type === 'ask_user') {
+    const answer = window.prompt(question.text)
+    if (answer !== null) {
+      agent.send({ type: 'ASK_USER_RESPONSE', answer })
+    }
+  }
+}
 
 const handleSubmit = async (text: string) => {
   const response = await agent.input(text);
-
-  if (!response.done) {
-    // Agent asked a follow-up question
-    // The question is in response.text and agent.ui also contains ask_user.
-    console.log('Agent asks:', response.text);
-  }
+  console.log('Final response:', response.text);
 };
 ```
 
@@ -431,9 +439,10 @@ import type {
   ChatItemType,
   AgentStatus,
   PlanEntry,
-  ConnectOptions,
   UseAgentForHumanReturn,
 } from '@connectonion/react';
+
+import type { ConnectOptions } from '@connectonion/react/connect';
 ```
 
 ## Server-Side Rendering (SSR)

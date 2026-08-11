@@ -46,11 +46,16 @@ export { RemoteAgent } from './remote-agent';
  * console.log(agent.ui);       // Array of UI events
  * console.log(agent.status);   // 'idle' | 'working' | 'waiting'
  *
- * // Multi-turn conversation
- * const r1 = await agent.input("Book a flight to NYC");
- * if (!r1.done) {
- *   const r2 = await agent.input("Tomorrow at 10am");
- * }
+ * // Interactive runs stay pending while the agent waits for a human.
+ * agent.onMessage = () => {
+ *   const question = [...agent.ui].reverse().find(
+ *     item => item.type === 'ask_user' && !item.answered
+ *   );
+ *   if (question?.type === 'ask_user') {
+ *     agent.send({ type: 'ASK_USER_RESPONSE', answer: 'Tomorrow at 10am' });
+ *   }
+ * };
+ * const response = await agent.input("Book a flight to NYC");
  *
  * // With signing (for strict trust agents)
  * import { address } from '@connectonion/react';
