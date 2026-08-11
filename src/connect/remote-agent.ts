@@ -726,14 +726,14 @@ export class RemoteAgent {
           // this process. Keep the card answered and never send it twice.
         } else if (!current || current.answered || sameRequest) {
           this._pendingApproval = {
-            chatItemId: request.toolCallId,
+            chatItemId: request.requestId,
             answered: false,
             acp: request,
           };
           this._status = 'waiting';
           this._addChatItem({
             type: 'approval_needed',
-            id: request.toolCallId,
+            id: request.requestId,
             tool: request.title,
             arguments: request.rawInput,
           });
@@ -753,7 +753,7 @@ export class RemoteAgent {
       );
       const chatItemId = isACPPair
         ? current.chatItemId
-        : toolCallId || requestId || generateUUID();
+        : requestId || generateUUID();
       if (!isACPPair) {
         this._pendingApproval = {
           chatItemId,

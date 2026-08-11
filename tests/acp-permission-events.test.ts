@@ -64,7 +64,7 @@ describe('ACP v1.19 Host permission requests', () => {
     deliver(acpRequest());
 
     expect(agent.ui).toEqual([{
-      id: TOOL_CALL_ID,
+      id: REQUEST_ID,
       type: 'approval_needed',
       tool: 'Bash(npm test)',
       arguments: { command: 'npm test' },
@@ -88,7 +88,7 @@ describe('ACP v1.19 Host permission requests', () => {
 
     expect(agent.ui).toHaveLength(1);
     expect(agent.ui[0]).toMatchObject({
-      id: TOOL_CALL_ID,
+      id: REQUEST_ID,
       description: 'Run the test suite',
       batch_remaining: [{ tool: 'read_file', arguments: '{}' }],
     });
@@ -101,6 +101,36 @@ describe('ACP v1.19 Host permission requests', () => {
     deliver(acpRequest());
 
     expect(agent.ui).toHaveLength(1);
+  });
+
+  test('the approval request UUID cannot overwrite its tool card', () => {
+    const { agent, deliver } = harness();
+    deliver({
+      type: 'tool_call',
+      id: TOOL_CALL_ID,
+      name: 'bash',
+      args: { command: 'npm test' },
+      status: 'running',
+    });
+    deliver(acpRequest());
+    deliver({
+      type: 'approval_needed',
+      id: REQUEST_ID,
+      tool_call_id: TOOL_CALL_ID,
+      tool: 'Bash(npm test)',
+      arguments: { command: 'npm test' },
+    });
+
+    expect(agent.ui).toHaveLength(2);
+    expect(agent.ui[0]).toMatchObject({
+      id: TOOL_CALL_ID,
+      type: 'tool_call',
+      status: 'running',
+    });
+    expect(agent.ui[1]).toMatchObject({
+      id: REQUEST_ID,
+      type: 'approval_needed',
+    });
   });
 
   test('wrong-session and malformed ACP fall back to the legacy frame', () => {

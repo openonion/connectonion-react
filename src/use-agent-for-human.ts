@@ -345,10 +345,16 @@ export function useAgentForHuman(
   // Memoized on the agent identity: callers put this in an effect's dep array, and a
   // fresh closure per render would re-run that effect on every render.
   const connect = useCallback(() => {
+    // A warm connection must claim the hook's session before CONNECT. Otherwise
+    // the Host allocates another ID, then strict ACP session checks reject the
+    // permission request for the conversation this hook is rendering.
+    if (!(agent as any)._currentSession?.session_id) {
+      (agent as any)._currentSession = { session_id: sessionId };
+    }
     // Errors are surfaced on the agent (error state + onMessage flush) by connect();
     // caught here only to avoid an unhandled rejection on this fire-and-forget call.
     agent.connect().catch(() => {});
-  }, [agent]);
+  }, [agent, sessionId]);
 
   const reset = () => {
     agent.reset();          // closes this session's WebSocket + clears agent state
