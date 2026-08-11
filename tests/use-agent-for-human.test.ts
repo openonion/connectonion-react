@@ -292,6 +292,93 @@ describe('useAgentForHuman hook', () => {
 
       expect(result.current.mode).toBe('accept_edits');
     });
+
+    it('exposes advertised modes and waits for the acknowledged mode response', async () => {
+      let socket: ModeTransactionWS | null = null;
+      class ModeTransactionWS extends MockWebSocket {
+        requestId: string | null = null;
+
+        constructor(url: string) {
+          super(url);
+          socket = this;
+        }
+
+        override send(data: unknown): void {
+          const msg = JSON.parse(String(data));
+          if (msg.type === 'PONG') return;
+          if (msg.type === 'CONNECT') {
+            const reply = {
+              type: 'CONNECTED',
+              session_id: 'mode-write-session',
+              status: 'new',
+              carrier_capabilities: {
+                acp: {
+                  schema: 'schema-v1.19.0',
+                  client_requests: ['session/set_mode'],
+                },
+              },
+              session_modes: {
+                currentModeId: 'safe',
+                availableModes: [
+                  { id: 'safe', name: 'Safe' },
+                  { id: 'accept_edits', name: 'Auto' },
+                ],
+              },
+            };
+            setTimeout(() => this.onmessage?.({ data: JSON.stringify(reply) }), 0);
+            return;
+          }
+          if (msg.type === 'ACP_REQUEST') this.requestId = msg.message.id;
+        }
+
+        acknowledge(): void {
+          this.onmessage?.({ data: JSON.stringify({
+            type: 'ACP_RESPONSE',
+            acpSchema: 'schema-v1.19.0',
+            sessionId: 'mode-write-session',
+            message: { jsonrpc: '2.0', id: this.requestId, result: {} },
+          }) });
+        }
+      }
+      ActiveWS = ModeTransactionWS;
+      const addr = uniqueAddr();
+      const { result } = renderHook(() =>
+        useAgentForHuman(addr, 'mode-write-session')
+      );
+
+      await act(async () => {
+        result.current.connect();
+        await flush();
+      });
+      expect(result.current.availableModes.map((mode) => mode.id)).toEqual([
+        'safe', 'accept_edits',
+      ]);
+
+      let change!: Promise<void>;
+      await act(async () => {
+        change = result.current.setSessionMode('accept_edits');
+        await Promise.resolve();
+      });
+      expect(result.current.mode).toBe('safe');
+      expect(result.current.modeChangePending).toBe(true);
+      expect(sentFrames.find((frame) => frame.type === 'ACP_REQUEST')).toMatchObject({
+        message: {
+          method: 'session/set_mode',
+          params: {
+            sessionId: 'mode-write-session',
+            modeId: 'accept_edits',
+          },
+        },
+      });
+
+      await act(async () => {
+        socket!.acknowledge();
+        await change;
+      });
+      expect(result.current.mode).toBe('accept_edits');
+      expect(result.current.modeChangePending).toBe(false);
+      expect(result.current.error).toBeNull();
+    });
   });
 
   describe('reset method', () => {
