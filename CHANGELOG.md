@@ -12,8 +12,9 @@ standalone TypeScript SDK is not required by React consumers.
 - Host-advertised session modes through `availableModes`.
 - Acknowledged `setSessionMode` transactions and `modeChangePending` UI state.
 - ACP cancellation when the Host advertises it.
-- Host-published thoughts normalized as stable `thinking` items without exposing
-  provider diagnostics or hidden model fields.
+- Host-supplied thoughts normalized as stable `thinking` items. The ConnectOnion
+  Host profile publishes only persisted, already-visible application thoughts;
+  React cannot classify text supplied by third-party Hosts.
 - Session-scoped, complete-replacement ACP plan state through
   `useAgentForHuman().plan`, including reconnect persistence and empty clearing.
 

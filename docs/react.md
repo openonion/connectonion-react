@@ -17,10 +17,10 @@ npm install @connectonion/react
 import { useAgentForHuman } from '@connectonion/react';
 
 function ChatBot({ sessionId }: { sessionId: string }) {
-  const { ui, status, input, isProcessing } = useAgentForHuman('0x123abc', { sessionId });
+  const { ui, status, input, isProcessing } = useAgentForHuman('0x123abc', sessionId);
 
-  const handleSubmit = async (text: string) => {
-    await input(text);
+  const handleSubmit = (text: string) => {
+    input(text);
   };
 
   return (
@@ -46,8 +46,9 @@ function ChatBot({ sessionId }: { sessionId: string }) {
 const {
   status,         // 'idle' | 'working' | 'waiting'
   ui,             // ChatItem[] - events for rendering
+  plan,           // readonly PlanEntry[] - latest complete plan snapshot
   sessionId,      // string - the session ID you passed in
-  input,          // (prompt: string) => Promise<Response>
+  input,          // (prompt: string) => void - reactive, fire-and-forget
   reset,          // () => void - start fresh
   isProcessing,   // boolean - true when status !== 'idle'
   error,          // Error | null - last error
@@ -55,7 +56,7 @@ const {
   respondToApproval, // (approved: boolean, ...) => void
   connect,        // () => void - open the socket without sending input
   dashboardHtml,  // string | null - the agent's Home page, if it has one
-} = useAgentForHuman(address, options);
+} = useAgentForHuman(address, sessionId);
 ```
 
 ### Parameters
@@ -63,22 +64,7 @@ const {
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `address` | `string` | Agent's public address (0x...) |
-| `options` | `UseAgentForHumanOptions` | Options with required `sessionId` |
-
-### Options
-
-```tsx
-interface UseAgentForHumanOptions extends ConnectOptions {
-  sessionId: string;         // Required - unique ID for this conversation
-}
-
-// ConnectOptions (passed to connect())
-interface ConnectOptions {
-  keys?: AddressData;        // Signing keys for strict trust
-  relayUrl?: string;         // Custom relay URL
-  enablePolling?: boolean;   // Polling fallback (default: true)
-}
-```
+| `sessionId` | `string` | Required unique ID for this conversation |
 
 ## UI Events
 
@@ -112,7 +98,7 @@ ACP request IDs, Host session correlation, legacy fallback, and duplicate
 suppression; components should not construct protocol frames.
 
 ```tsx
-const { ui, respondToApproval } = useAgentForHuman(address, { sessionId });
+const { ui, respondToApproval } = useAgentForHuman(address, sessionId);
 const approval = ui.find(item =>
   item.type === 'approval_needed' && !item.answered
 );
@@ -161,6 +147,20 @@ leaves `mode` unchanged. Reconnect before retrying an unknown timeout/disconnect
 Plan is product workflow state over an acknowledged `safe` policy. It is deliberately
 excluded from `ServerApprovalMode` and must never be sent as `session/set_mode`.
 
+### Current plan
+
+The hook exposes the latest complete plan snapshot separately from the chat transcript:
+
+```tsx
+const { plan } = useAgentForHuman(address, sessionId)
+```
+
+Each entry has `content`, `priority` (`high | medium | low`), and `status`
+(`pending | in_progress | completed`). Every ACP plan update replaces the whole list;
+an empty list clears it. The snapshot persists with its session and is restored on
+reconnect. It is read-only progress state, not an approval surface: keep interactive
+`plan_review` handling separate and never use `plan` to authorize implementation.
+
 ### Tool Call Status
 
 Tool calls have a `status` field:
@@ -206,9 +206,11 @@ function EventRenderer({ event }: { event: UIEvent }) {
 }
 ```
 
-## Response Object
+## Low-Level Response Object
 
-The `input()` function returns a `Response`:
+The React hook's `input()` is fire-and-forget; watch `ui`, `status`, and `error` for
+reactive results. The low-level agent returned by `connect()` instead resolves a
+`Response`:
 
 ```tsx
 interface Response {
@@ -222,12 +224,16 @@ interface Response {
 When `done: false`, the agent is asking for more information:
 
 ```tsx
+import { connect } from '@connectonion/react/connect'
+
+const agent = connect(address)
+
 const handleSubmit = async (text: string) => {
-  const response = await input(text);
+  const response = await agent.input(text);
 
   if (!response.done) {
     // Agent asked a follow-up question
-    // The question is in response.text and also in ui as 'ask_user' event
+    // The question is in response.text and agent.ui also contains ask_user.
     console.log('Agent asks:', response.text);
   }
 };
@@ -255,7 +261,7 @@ The `useAgentForHuman` hook automatically persists session state to `localStorag
 const sessionId = crypto.randomUUID();
 
 // Pass it to the hook - session auto-persists
-const { input, reset } = useAgentForHuman('0x123abc', { sessionId });
+const { input, reset } = useAgentForHuman('0x123abc', sessionId);
 
 // reset() clears the Zustand store for this sessionId
 // To start a NEW conversation, navigate to a new sessionId
@@ -285,7 +291,7 @@ host pushes over the same WebSocket the chat uses. `dashboardHtml` holds the lat
 copy, or `null` if the agent doesn't have one.
 
 ```tsx
-const { dashboardHtml, connect } = useAgentForHuman(address, { sessionId });
+const { dashboardHtml, connect } = useAgentForHuman(address, sessionId);
 
 // Warm the connection so Home paints before the user's first message
 useEffect(() => { connect() }, [connect]);
@@ -337,16 +343,16 @@ that list is still loading. See the reference implementation in
 import { useAgentForHuman } from '@connectonion/react';
 
 function Chat({ sessionId }: { sessionId: string }) {
-  const { ui, input, isProcessing, reset } = useAgentForHuman('0x123abc', { sessionId });
+  const { ui, input, isProcessing, reset } = useAgentForHuman('0x123abc', sessionId);
   const [text, setText] = useState('');
 
-  const handleSubmit = async (e: FormEvent) => {
+  const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (!text.trim() || isProcessing) return;
 
     const prompt = text;
     setText('');
-    await input(prompt);
+    input(prompt);
   };
 
   return (
@@ -375,23 +381,20 @@ function Chat({ sessionId }: { sessionId: string }) {
 }
 ```
 
-### With Signing Keys (Strict Trust)
+### With Signing Keys (Low-Level API)
 
 ```tsx
-import { generateBrowser, useAgentForHuman } from '@connectonion/react';
+import { generateBrowser } from '@connectonion/react';
+import { connect } from '@connectonion/react/connect';
 
-function SecureAgent({ sessionId }: { sessionId: string }) {
-  // Generate or load keys
-  const [keys] = useState(() => generateBrowser());
-
-  const { input } = useAgentForHuman('0x123abc', { sessionId, keys });
-
-  // Your public address for the agent to verify
-  console.log('My address:', keys.address);
-
-  return <div>...</div>;
-}
+const keys = generateBrowser();
+const agent = connect('0x123abc', { keys });
+const response = await agent.input('Hello');
 ```
+
+`useAgentForHuman` owns the normal browser connection for React applications and accepts
+only `address` and `sessionId`. Use the low-level `connect()` API when you need custom
+connection options such as explicit signing keys or a direct URL.
 
 ### Tool Execution Visualization
 
@@ -427,8 +430,8 @@ import type {
   ChatItem,
   ChatItemType,
   AgentStatus,
+  PlanEntry,
   ConnectOptions,
-  UseAgentForHumanOptions,
   UseAgentForHumanReturn,
 } from '@connectonion/react';
 ```
@@ -440,7 +443,7 @@ The hook is safe for SSR - it initializes with empty state and only connects on 
 ```tsx
 // Works in Next.js, Remix, etc.
 function Page() {
-  const { ui, input } = useAgentForHuman('0x123abc', { sessionId: 'my-session' });
+  const { ui, input } = useAgentForHuman('0x123abc', 'my-session');
 
   // ui is [] on server, populated on client
   return <div>{ui.map(...)}</div>;
