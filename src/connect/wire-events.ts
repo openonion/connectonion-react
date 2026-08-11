@@ -1,6 +1,7 @@
 /** ACP v1.19 compatibility decoding for the ConnectOnion WebSocket carrier. */
 
 import type {
+  CancelNotification,
   PermissionOption,
   RequestPermissionRequest,
   RequestPermissionResponse,
@@ -42,6 +43,29 @@ export type ApprovalRejectMode =
   | 'reject_soft'
   | 'reject_hard'
   | 'reject_explain';
+
+export function hostSupportsACPCancel(
+  connected: Record<string, unknown>,
+): boolean {
+  const capabilities = record(connected.carrier_capabilities);
+  const acp = record(capabilities?.acp);
+  return acp?.schema === ACP_SCHEMA_VERSION
+    && Array.isArray(acp.client_notifications)
+    && acp.client_notifications.includes('session/cancel');
+}
+
+export function acpCancelFrame(sessionId: string): Record<string, unknown> {
+  const params: CancelNotification = { sessionId };
+  return {
+    type: 'ACP_NOTIFICATION',
+    acpSchema: ACP_SCHEMA_VERSION,
+    message: {
+      jsonrpc: '2.0',
+      method: 'session/cancel',
+      params,
+    },
+  };
+}
 
 export function decodeACPPermissionRequest(
   frame: Record<string, unknown>,
@@ -108,6 +132,24 @@ export function acpPermissionResponseFrame(
   if (!approved && advertised && feedback) {
     result._meta = { connectonion: { feedback } };
   }
+  return {
+    type: 'ACP_RESPONSE',
+    acpSchema: ACP_SCHEMA_VERSION,
+    sessionId: request.sessionId,
+    message: {
+      jsonrpc: '2.0',
+      id: request.requestId,
+      result,
+    },
+  };
+}
+
+export function acpPermissionCancelledFrame(
+  request: ACPPermissionRequest,
+): Record<string, unknown> {
+  const result: RequestPermissionResponse = {
+    outcome: { outcome: 'cancelled' },
+  };
   return {
     type: 'ACP_RESPONSE',
     acpSchema: ACP_SCHEMA_VERSION,

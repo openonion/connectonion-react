@@ -125,6 +125,9 @@ export interface UseAgentForHumanReturn {
     feedback?: string,
   ) => void;
 
+  /** Stop the current turn through negotiated ACP or one-shot legacy fallback. */
+  interrupt: () => void;
+
   /** Sign an onboard payload (requires private keys). Pass result to sendMessage(). */
   signOnboard: (options: { inviteCode?: string; payment?: number }) => OutgoingMessage;
 
@@ -373,6 +376,8 @@ export function useAgentForHuman(
     feedback?: string,
   ) => agent.respondToApproval(approved, scope, mode, feedback);
 
+  const interrupt = () => agent.interrupt();
+
   const setMode = (newMode: ApprovalMode, options?: { turns?: number }) => {
     agent.setMode(newMode, options);
     // Mirror the mode change into the Zustand store immediately so the UI reflects it
@@ -406,6 +411,7 @@ export function useAgentForHuman(
     connect,
     sendMessage,
     respondToApproval,
+    interrupt,
     signOnboard: (options: { inviteCode?: string; payment?: number }) => agent.signOnboard(options),
     setMode,
     reconnect,
