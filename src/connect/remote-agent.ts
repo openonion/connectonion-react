@@ -41,7 +41,7 @@
 import * as address from '../address';
 import {
   AgentInfo, AgentStatus, ApprovalMode, ChatItem, ChatItemType, ConnectionState,
-  ConnectOptions, RemoteSessionStatus, ResolvedEndpoint, Response, SessionState, WebSocketCtor, WebSocketLike,
+  ConnectOptions, PlanEntry, RemoteSessionStatus, ResolvedEndpoint, Response, SessionState, WebSocketCtor, WebSocketLike,
 } from './types';
 import {
   AgentInfoSource, getWebSocketCtor, generateUUID, normalizeRelayUrl, resolveEndpoint, toAgentInfo,
@@ -59,10 +59,13 @@ import {
   acpPermissionResponseFrame,
   acpSetSessionModeFrame,
   decodeACPModeUpdate,
+  decodeACPPlanUpdate,
   decodeACPPermissionRequest,
   decodeACPSetModeResponse,
+  decodeLegacyPlanUpdate,
   hostSessionModeState,
   hostSupportsACPCancel,
+  normalizePlanEntries,
   parseServerApprovalMode,
   ServerApprovalMode,
 } from './wire-events';
@@ -172,6 +175,9 @@ export class RemoteAgent {
   get currentSession(): SessionState | null { return this._currentSession; }
   get ui(): ChatItem[] { return this._chatItems; }
   get mode(): ApprovalMode { return this._currentSession?.mode || 'safe'; }
+  get plan(): ReadonlyArray<PlanEntry> {
+    return this._currentSession?.plan?.map((entry) => ({ ...entry })) ?? [];
+  }
   get availableModes(): ReadonlyArray<HostSessionModeState['availableModes'][number]> {
     return this._sessionModes?.availableModes.map((mode) => ({ ...mode })) ?? [];
   }
@@ -503,6 +509,49 @@ export class RemoteAgent {
     return true;
   }
 
+  private _applyPlanUpdate(sessionId: string, entries: PlanEntry[]): boolean {
+    if (sessionId !== this._currentSession?.session_id) return false;
+    const current = this._currentSession.plan;
+    if (
+      current?.length === entries.length
+      && current.every((entry, index) => {
+        const next = entries[index];
+        return entry.content === next.content
+          && entry.priority === next.priority
+          && entry.status === next.status;
+      })
+    ) return false;
+    this._currentSession = {
+      ...this._currentSession,
+      plan: entries.map((entry) => ({ ...entry })),
+    };
+    return true;
+  }
+
+  /**
+   * Accept a server snapshot without letting an absent or malformed optional
+   * plan erase the last valid ACP state during a rolling Host upgrade.
+   */
+  private _applySessionSnapshot(value: unknown): void {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+    const raw = value as Record<string, unknown>;
+    const snapshot = { ...raw } as SessionState;
+    const sameSession = typeof raw.session_id === 'string'
+      && raw.session_id.length > 0
+      && raw.session_id === this._currentSession?.session_id;
+    const normalized = Object.prototype.hasOwnProperty.call(raw, 'plan')
+      ? normalizePlanEntries(raw.plan)
+      : null;
+    if (normalized) {
+      snapshot.plan = normalized;
+    } else if (sameSession && this._currentSession?.plan) {
+      snapshot.plan = this._currentSession.plan.map((entry) => ({ ...entry }));
+    } else {
+      delete snapshot.plan;
+    }
+    this._currentSession = snapshot;
+  }
+
   private _resolveModeChange(
     pending: PendingModeChange,
     response: ACPSetModeResponse,
@@ -753,7 +802,7 @@ export class RemoteAgent {
       }
     }
     if (connected.server_newer && connected.session) {
-      this._currentSession = connected.session as SessionState;
+      this._applySessionSnapshot(connected.session);
     }
     // CONNECTED capability state is authoritative. A server_newer session can
     // still contain the pre-transaction mode, so reapply the advertised value
@@ -802,7 +851,7 @@ export class RemoteAgent {
 
       // CONNECTED during reconnect — update session and UI if server has newer data
       if (data.server_newer && data.session) {
-        this._currentSession = data.session as SessionState;
+        this._applySessionSnapshot(data.session);
       }
       if (data.server_newer && data.chat_items && Array.isArray(data.chat_items)) {
         this._mergeServerChatItems(data.chat_items as ChatItem[]);
@@ -831,7 +880,7 @@ export class RemoteAgent {
 
     // Session sync
     if (data?.type === 'session_sync' && data.session) {
-      this._currentSession = data.session;
+      this._applySessionSnapshot(data.session);
     }
 
     if (data?.type === 'SESSION_STATUS') {
@@ -878,6 +927,22 @@ export class RemoteAgent {
       return;
     }
 
+    const acpPlan = decodeACPPlanUpdate(data);
+    if (acpPlan) {
+      if (this._applyPlanUpdate(acpPlan.sessionId, acpPlan.entries)) {
+        this._onMessage?.();
+      }
+      return;
+    }
+
+    const legacyPlan = decodeLegacyPlanUpdate(data);
+    if (legacyPlan) {
+      if (this._applyPlanUpdate(legacyPlan.sessionId, legacyPlan.entries)) {
+        this._onMessage?.();
+      }
+      return;
+    }
+
     if (data?.type === 'mode_changed') {
       const mode = parseServerApprovalMode(data.mode);
       if (mode && this._applyServerMode(mode)) this._onMessage?.();
@@ -913,7 +978,7 @@ export class RemoteAgent {
       );
       if (accepted) this._clearPlaceholder();
       if (accepted && data.session) {
-        this._currentSession = data.session;
+        this._applySessionSnapshot(data.session);
       }
     }
 
@@ -1054,7 +1119,7 @@ export class RemoteAgent {
       this._pendingApproval = null;
 
       if (data.session) {
-        this._currentSession = data.session;
+        this._applySessionSnapshot(data.session);
       }
 
       if (data.server_newer && data.chat_items && Array.isArray(data.chat_items)) {

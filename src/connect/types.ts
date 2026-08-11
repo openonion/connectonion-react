@@ -120,11 +120,26 @@ export interface ConnectOptions {
   wsCtor?: WebSocketCtor;
 }
 
+/** Stable ACP plan priority. Kept separate from ConnectOnion's approval mode. */
+export type PlanEntryPriority = 'high' | 'medium' | 'low';
+
+/** Stable ACP plan lifecycle state. */
+export type PlanEntryStatus = 'pending' | 'in_progress' | 'completed';
+
+/** One item in the current session's full ACP plan snapshot. */
+export interface PlanEntry {
+  readonly content: string;
+  readonly priority: PlanEntryPriority;
+  readonly status: PlanEntryStatus;
+}
+
 export interface SessionState {
   session_id?: string;
   messages?: Array<{ role: string; content: string }>;
   trace?: unknown[];
   turn?: number;
+  /** Latest full ACP plan snapshot. An empty array explicitly clears the plan. */
+  plan?: ReadonlyArray<PlanEntry>;
   mode?: 'safe' | 'plan' | 'accept_edits' | 'ulw';
   /** ULW mode: max turns before pausing */
   ulw_turns?: number;

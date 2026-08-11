@@ -85,6 +85,35 @@ class MockWebSocket {
   }
 }
 
+class PlanWebSocket extends MockWebSocket {
+  send(data: unknown): void {
+    const msg = JSON.parse(String(data));
+    super.send(data);
+    if (msg.type !== 'CONNECT') return;
+    setTimeout(() => this.onmessage?.({
+      data: JSON.stringify({
+        type: 'ACP_NOTIFICATION',
+        acpSchema: 'schema-v1.19.0',
+        message: {
+          jsonrpc: '2.0',
+          method: 'session/update',
+          params: {
+            sessionId: msg.session_id,
+            update: {
+              sessionUpdate: 'plan',
+              entries: [{
+                content: 'Render the plan',
+                priority: 'high',
+                status: 'in_progress',
+              }],
+            },
+          },
+        },
+      }),
+    }), 10);
+  }
+}
+
 // Swappable WebSocket class — tests can override for error scenarios
 let ActiveWS: any = MockWebSocket;
 let sentFrames: Array<Record<string, unknown>> = [];
@@ -188,6 +217,30 @@ describe('useAgentForHuman hook', () => {
       expect(sentFrames.find(frame => frame.type === 'CONNECT')).toMatchObject({
         session_id: 'warm-session-123',
       });
+    });
+
+    it('exposes React-normalized ACP plan state outside the chat timeline', async () => {
+      ActiveWS = PlanWebSocket;
+      const addr = uniqueAddr();
+      const { result } = renderHook(() =>
+        useAgentForHuman(addr, 'plan-session')
+      );
+
+      expect(result.current.plan).toEqual([]);
+      await act(async () => {
+        result.current.connect();
+        await flush();
+      });
+
+      expect(result.current.plan).toEqual([{
+        content: 'Render the plan',
+        priority: 'high',
+        status: 'in_progress',
+      }]);
+      expect(result.current.ui).toEqual([]);
+      expect(Object.values(mockStorage).some(
+        (value) => value.includes('Render the plan'),
+      )).toBe(true);
     });
   });
 
