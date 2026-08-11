@@ -54,8 +54,11 @@ import {
   acpCancelFrame,
   acpPermissionCancelledFrame,
   acpPermissionResponseFrame,
+  decodeACPModeUpdate,
   decodeACPPermissionRequest,
   hostSupportsACPCancel,
+  parseServerApprovalMode,
+  ServerApprovalMode,
 } from './wire-events';
 
 interface PendingApproval {
@@ -404,6 +407,16 @@ export class RemoteAgent {
     }
   }
 
+  private _applyServerMode(mode: ServerApprovalMode): boolean {
+    if (this._currentSession?.mode === mode) return false;
+    if (!this._currentSession) {
+      this._currentSession = { mode };
+    } else {
+      this._currentSession.mode = mode;
+    }
+    return true;
+  }
+
   reset(): void {
     this._closeWs();
     this._currentSession = null;
@@ -706,12 +719,19 @@ export class RemoteAgent {
       // Server had newer session
     }
 
-    if (data?.type === 'mode_changed' && data.mode) {
-      if (!this._currentSession) {
-        this._currentSession = { mode: data.mode };
-      } else {
-        this._currentSession.mode = data.mode;
-      }
+    const acpMode = decodeACPModeUpdate(data);
+    if (acpMode) {
+      if (
+        acpMode.sessionId === this._currentSession?.session_id
+        && this._applyServerMode(acpMode.mode)
+      ) this._onMessage?.();
+      return;
+    }
+
+    if (data?.type === 'mode_changed') {
+      const mode = parseServerApprovalMode(data.mode);
+      if (mode && this._applyServerMode(mode)) this._onMessage?.();
+      return;
     }
 
     // ULW turns reached

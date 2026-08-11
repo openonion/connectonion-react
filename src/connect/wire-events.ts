@@ -9,9 +9,15 @@ import type {
   SessionUpdate,
   ToolCallStatus,
 } from '@agentclientprotocol/sdk';
+import type { ApprovalMode } from './types';
 
 const ACP_SCHEMA_VERSION = 'schema-v1.19.0';
 const TOOL_STATUSES = new Set(['pending', 'in_progress', 'completed', 'failed']);
+const SERVER_APPROVAL_MODES = new Set<ServerApprovalMode>([
+  'safe',
+  'accept_edits',
+  'ulw',
+]);
 const HOST_PERMISSION_KINDS = new Map<string, PermissionOption['kind']>([
   ['allow_once', 'allow_once'],
   ['allow_session', 'allow_always'],
@@ -37,6 +43,13 @@ export interface ACPPermissionRequest {
   title: string;
   rawInput: Record<string, unknown>;
   options: PermissionOption[];
+}
+
+export type ServerApprovalMode = Exclude<ApprovalMode, 'plan'>;
+
+export interface ACPModeUpdate {
+  sessionId: string;
+  mode: ServerApprovalMode;
 }
 
 export type ApprovalRejectMode =
@@ -159,6 +172,44 @@ export function acpPermissionCancelledFrame(
       id: request.requestId,
       result,
     },
+  };
+}
+
+export function parseServerApprovalMode(
+  value: unknown,
+): ServerApprovalMode | null {
+  return typeof value === 'string'
+    && SERVER_APPROVAL_MODES.has(value as ServerApprovalMode)
+    ? value as ServerApprovalMode
+    : null;
+}
+
+/** Decode an authoritative server mode observation, never a policy grant. */
+export function decodeACPModeUpdate(
+  frame: unknown,
+): ACPModeUpdate | null {
+  const carrier = record(frame);
+  if (
+    carrier?.type !== 'ACP_NOTIFICATION'
+    || carrier.acpSchema !== ACP_SCHEMA_VERSION
+  ) return null;
+  const message = record(carrier.message);
+  if (
+    message?.jsonrpc !== '2.0'
+    || message.method !== 'session/update'
+  ) return null;
+  const params = record(message.params);
+  const update = record(params?.update);
+  if (
+    !nonEmpty(params?.sessionId)
+    || update?.sessionUpdate !== 'current_mode_update'
+  ) return null;
+  const mode = parseServerApprovalMode(update.currentModeId);
+  if (!mode) return null;
+
+  return {
+    sessionId: params.sessionId,
+    mode,
   };
 }
 
