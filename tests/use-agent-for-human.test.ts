@@ -87,11 +87,18 @@ class MockWebSocket {
 
 // Swappable WebSocket class — tests can override for error scenarios
 let ActiveWS: any = MockWebSocket;
+let sentFrames: Array<Record<string, unknown>> = [];
 
 // Proxy that delegates to ActiveWS at construction time
 const DynamicWS = new Proxy(MockWebSocket, {
   construct(_target, args) {
-    return new ActiveWS(...args);
+    const socket = new ActiveWS(...args);
+    const send = socket.send.bind(socket);
+    socket.send = (data: unknown) => {
+      sentFrames.push(JSON.parse(String(data)));
+      send(data);
+    };
+    return socket;
   },
 });
 
@@ -123,6 +130,7 @@ describe('useAgentForHuman hook', () => {
   beforeEach(() => {
     mockLocalStorage.clear();
     ActiveWS = MockWebSocket;
+    sentFrames = [];
   });
 
   describe('initialization', () => {
@@ -164,6 +172,22 @@ describe('useAgentForHuman hook', () => {
         useAgentForHuman(addr, 'my-session-123')
       );
       expect(result.current.sessionId).toBe('my-session-123');
+    });
+
+    it('warm connect claims the provided session before opening the socket', async () => {
+      const addr = uniqueAddr();
+      const { result } = renderHook(() =>
+        useAgentForHuman(addr, 'warm-session-123')
+      );
+
+      await act(async () => {
+        result.current.connect();
+        await flush();
+      });
+
+      expect(sentFrames.find(frame => frame.type === 'CONNECT')).toMatchObject({
+        session_id: 'warm-session-123',
+      });
     });
   });
 
