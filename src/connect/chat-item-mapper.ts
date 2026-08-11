@@ -115,13 +115,21 @@ export function mapEventToChatItem(
     }
 
     case 'thinking': {
-      addItem({
+      const thoughtId = decoded.id != null ? String(decoded.id) : undefined;
+      const content = typeof decoded.content === 'string'
+        ? decoded.content
+        : undefined;
+      const kind = typeof decoded.kind === 'string' ? decoded.kind : undefined;
+      const item: Partial<ChatItem> & { type: 'thinking' } = {
         type: 'thinking',
-        id: event.id != null ? String(event.id) : undefined,
+        id: thoughtId,
         status: 'done',
-        content: event.content as string | undefined,
-        kind: event.kind as string | undefined,
-      });
+      };
+      // Do not erase richer product metadata when an ACP/legacy twin arrives
+      // without it. RemoteAgent upserts stable IDs by spreading only present keys.
+      if (content != null) item.content = content;
+      if (kind != null) item.kind = kind;
+      addItem(item);
       break;
     }
 
