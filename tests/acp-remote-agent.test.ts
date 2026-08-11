@@ -1,6 +1,7 @@
 import { RemoteAgent } from '../src/connect/remote-agent';
 import fixture from './fixtures/acp_tool_events.json';
 import messageFixture from './fixtures/acp_agent_message_events.json';
+import thoughtFixture from './fixtures/acp_thought_events.json';
 
 function remoteAgent() {
   const agent = new RemoteAgent(`0x${'a'.repeat(64)}`, {}) as any;
@@ -117,6 +118,31 @@ describe('ACP notifications through RemoteAgent', () => {
       type: 'agent',
       id: '6d1fcd7e-2e31-4ac4-9f39-7de8f73cd82e',
       content: 'The final answer.',
+    }]);
+  });
+
+  test('public thought dual-write and replay converge without losing kind', () => {
+    const { agent, deliver } = remoteAgent();
+    deliver({
+      type: 'CONNECTED',
+      status: 'running',
+      server_newer: true,
+      session: { session_id: 'session-1' },
+      chat_items: [thoughtFixture.legacy[0]],
+    });
+    const acpWithoutKind: any = structuredClone(thoughtFixture.acp[0]);
+    delete acpWithoutKind.message.params.update._meta;
+
+    deliver(acpWithoutKind);
+    deliver(thoughtFixture.legacy[0]);
+    deliver(acpWithoutKind);
+
+    expect(agent.ui).toEqual([{
+      type: 'thinking',
+      id: 'fe524e77-f886-48de-a0c2-84f67f4db706',
+      status: 'done',
+      content: 'The search result needs one more check.',
+      kind: 'reflect',
     }]);
   });
 

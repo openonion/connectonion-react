@@ -394,6 +394,22 @@ function decodeACPUpdate(update: SessionUpdate): Record<string, unknown> | null 
       content: content.text,
     };
   }
+  if (update.sessionUpdate === 'agent_thought_chunk') {
+    // ACP allows messageId to be omitted, but the ConnectOnion Host profile
+    // dual-writes this update beside a persisted legacy event. Stable identity
+    // is therefore required to make live, compatibility, and replay paths
+    // converge on one ChatItem.
+    if (!nonEmpty(update.messageId)) return null;
+    const content = record(update.content);
+    if (content?.type !== 'text' || !nonEmpty(content.text)) return null;
+    const kind = thoughtKind(update._meta);
+    return {
+      type: 'thinking',
+      id: update.messageId,
+      content: content.text,
+      ...(kind ? { kind } : {}),
+    };
+  }
   if (update.sessionUpdate === 'tool_call') {
     if (!nonEmpty(update.toolCallId) || !nonEmpty(update.title)) return null;
     if (update.status != null && !TOOL_STATUSES.has(String(update.status))) return null;
@@ -431,6 +447,11 @@ function toolResultText(update: Extract<SessionUpdate, { sessionUpdate: 'tool_ca
 function timingMs(value: unknown): number | undefined {
   const timing = record(record(value)?.connectonion)?.timingMs;
   return typeof timing === 'number' ? timing : undefined;
+}
+
+function thoughtKind(value: unknown): string | undefined {
+  const kind = record(record(value)?.connectonion)?.kind;
+  return nonEmpty(kind) ? kind : undefined;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

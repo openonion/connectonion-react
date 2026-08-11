@@ -99,6 +99,15 @@ suppression; React applications should not build `ACP_RESPONSE` frames or keep
 JSON-RPC request IDs in component state. During a rolling upgrade, paired ACP
 and legacy Host requests render as one normalized `approval_needed` item.
 
+The same browser boundary normalizes ACP `agent_thought_chunk` updates to
+`thinking` items and de-duplicates them with legacy and replayed events by their
+persisted ID. The ConnectOnion Host profile sends one complete recorded thought per
+message ID; it does not claim provider token streaming. The SDK decodes text explicitly
+sent by the connected Host; it cannot
+classify that text's origin. The ConnectOnion Host profile separately promises to map
+only persisted, already-visible application `thinking` events—not provider diagnostics
+or hidden model fields—to this update.
+
 ## Development
 
 ```bash

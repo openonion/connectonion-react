@@ -92,10 +92,18 @@ The `ui` array contains events for rendering the conversation. Each event has:
 |------|-------------|------------|
 | `user` | User message | `content: string` |
 | `agent` | Agent response | `content: string` |
-| `thinking` | Thinking indicator | - |
+| `thinking` | Host-supplied thought or running indicator | `status`, optional `content`, optional `kind` |
 | `tool_call` | Tool execution | `name`, `args`, `status`, `result` |
 | `ask_user` | Agent question | `text: string` |
 | `approval_needed` | Tool requires a decision | `tool`, `arguments`, `description?`, `answered?` |
+
+A ConnectOnion Host may deliver its public, application-authored thought text through ACP
+`agent_thought_chunk`; the SDK normalizes it to `thinking` and de-duplicates it
+with legacy/replayed events by persisted ID. The ConnectOnion Host profile sends one
+complete recorded thought per ID and does not claim provider token streaming. React
+decodes text explicitly sent in the frame and cannot classify its origin. The profile maps only
+persisted, already-visible application `thinking` events—not provider diagnostics or
+hidden model fields—to this update; third-party Hosts define their own privacy contract.
 
 ### Tool approvals
 
