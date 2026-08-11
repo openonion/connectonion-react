@@ -45,6 +45,31 @@ function Chat({ address }: { address: string }) {
 | `generateBrowser` / `saveBrowser` / `loadBrowser` / `signBrowser` / `createSignedPayloadBrowser` | Ed25519 browser identity |
 | types | `ChatItem`, `AgentInfo`, `SkillInfo`, `ApprovalMode`, `Message`, `Response`, … |
 
+## Session modes
+
+The authenticated Host advertises the complete policy set. Render only
+`availableModes`, keep controls disabled while `modeChangePending` is true, and await
+`setSessionMode` before presenting the new policy:
+
+```tsx
+const {
+  mode,
+  availableModes,
+  modeChangePending,
+  setSessionMode,
+} = useAgentForHuman(address, sessionId)
+
+await setSessionMode('accept_edits')
+```
+
+`setSessionMode` owns ACP request IDs, session correlation, acknowledgement validation,
+timeouts, and disconnect handling. It rejects without changing `mode` when the Host
+refuses or the outcome is unknown. `plan` is not a server policy and is never accepted by
+this API; products may layer a Plan workflow over an acknowledged Host `safe` mode.
+
+The old `setMode(mode, { turns })` remains temporarily for source compatibility but is
+optimistic and deprecated. New React applications must not use it or construct ACP frames.
+
 ## Sessions and storage
 
 `useAgentForHuman` persists each session under `localStorage['co:agent:{address}:session:{id}']`,
