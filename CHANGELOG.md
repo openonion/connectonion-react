@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.1 — 2026-08-12
 
 - Separate Codex-aligned `default` / `plan` collaboration modes from Host
   permission profiles `:read-only`, `:workspace`, and
