@@ -11,6 +11,8 @@ export type {
   AgentOnboard,
   SkillInfo,
   ApprovalMode,
+  CollaborationMode,
+  PermissionProfile,
   ServerApprovalMode,
   PlanEntry,
   PlanEntryPriority,

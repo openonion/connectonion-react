@@ -12,8 +12,8 @@ import type {
   SetSessionModeResponse,
   ToolCallStatus,
 } from '@agentclientprotocol/sdk';
-import type { PlanEntry, ServerApprovalMode } from './types';
-import { normalizeServerApprovalMode } from './mode-compat';
+import type { PermissionProfile, PlanEntry } from './types';
+import { normalizePermissionProfile } from './mode-compat';
 
 const ACP_SCHEMA_VERSION = 'schema-v1.19.0';
 const TOOL_STATUSES = new Set(['pending', 'in_progress', 'completed', 'failed']);
@@ -23,20 +23,20 @@ const PLAN_STATUSES = new Set<PlanEntry['status']>([
   'in_progress',
   'completed',
 ]);
-const SESSION_MODES: Record<ServerApprovalMode, SessionMode> = {
-  default: {
-    id: 'default',
-    name: 'Default',
-    description: 'Ask before sensitive tool calls.',
+const SESSION_MODES: Record<PermissionProfile, SessionMode> = {
+  ':read-only': {
+    id: ':read-only',
+    name: 'Read only',
+    description: 'Read freely; ask before edits, commands, or broader access.',
   },
-  auto_approve: {
-    id: 'auto_approve',
-    name: 'Auto-approve',
-    description: 'Apply named edits without asking; retain other policy checks.',
+  ':workspace': {
+    id: ':workspace',
+    name: 'Auto',
+    description: 'Edit the workspace automatically; broader actions still ask.',
   },
-  full_access: {
-    id: 'full_access',
-    name: 'Full access (YOLO)',
+  ':danger-full-access': {
+    id: ':danger-full-access',
+    name: 'Full access',
     description: 'Skip tool approval and continue to the configured checkpoint.',
   },
 };
@@ -69,7 +69,7 @@ export interface ACPPermissionRequest {
 
 export interface ACPModeUpdate {
   sessionId: string;
-  mode: ServerApprovalMode;
+  mode: PermissionProfile;
 }
 
 export interface ACPPlanUpdate {
@@ -78,7 +78,7 @@ export interface ACPPlanUpdate {
 }
 
 export interface HostSessionModeState {
-  currentModeId: ServerApprovalMode;
+  currentModeId: PermissionProfile;
   availableModes: SessionMode[];
 }
 
@@ -126,14 +126,14 @@ export function hostSessionModeState(
   ) return null;
 
   const state = record(connected.session_modes);
-  const currentModeId = parseServerApprovalMode(state?.currentModeId);
+  const currentModeId = parsePermissionProfile(state?.currentModeId);
   if (!currentModeId || !Array.isArray(state?.availableModes)) return null;
 
   const availableModes: SessionMode[] = [];
-  const seen = new Set<ServerApprovalMode>();
+  const seen = new Set<PermissionProfile>();
   for (const candidate of state.availableModes) {
     const mode = record(candidate);
-    const id = parseServerApprovalMode(mode?.id);
+    const id = parsePermissionProfile(mode?.id);
     if (!id || seen.has(id) || !nonEmpty(mode?.name)) return null;
     if (
       mode?.description != null
@@ -162,7 +162,7 @@ export function acpCancelFrame(sessionId: string): Record<string, unknown> {
 export function acpSetSessionModeFrame(
   requestId: string,
   sessionId: string,
-  modeId: ServerApprovalMode,
+  modeId: PermissionProfile,
 ): Record<string, unknown> {
   const params: SetSessionModeRequest = { sessionId, modeId };
   return {
@@ -336,8 +336,14 @@ export function acpPermissionCancelledFrame(
 
 export function parseServerApprovalMode(
   value: unknown,
-): ServerApprovalMode | null {
-  return normalizeServerApprovalMode(value);
+): PermissionProfile | null {
+  return parsePermissionProfile(value);
+}
+
+export function parsePermissionProfile(
+  value: unknown,
+): PermissionProfile | null {
+  return normalizePermissionProfile(value);
 }
 
 /** Decode an authoritative server mode observation, never a policy grant. */
@@ -360,7 +366,7 @@ export function decodeACPModeUpdate(
     !nonEmpty(params?.sessionId)
     || update?.sessionUpdate !== 'current_mode_update'
   ) return null;
-  const mode = parseServerApprovalMode(update.currentModeId);
+  const mode = parsePermissionProfile(update.currentModeId);
   if (!mode) return null;
 
   return {

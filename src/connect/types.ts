@@ -140,17 +140,30 @@ export interface SessionState {
   turn?: number;
   /** Latest full ACP plan snapshot. An empty array explicitly clears the plan. */
   plan?: ReadonlyArray<PlanEntry>;
-  mode?: ApprovalMode;
+  /** Host-enforced permission profile. Kept in `mode` for wire compatibility. */
+  mode?: PermissionProfile;
+  /** Local product workflow; never treated as Host authority. */
+  collaboration_mode?: CollaborationMode;
   /** Full access: max turns before pausing at a checkpoint. */
   full_access_turns?: number;
   /** Full access: turns used in the current checkpoint window. */
   full_access_turns_used?: number;
 }
 
-export type ServerApprovalMode = 'default' | 'auto_approve' | 'full_access';
+/** Exact built-in Codex permission profile identifiers. */
+export type PermissionProfile =
+  | ':read-only'
+  | ':workspace'
+  | ':danger-full-access';
 
-/** Plan is product workflow state; the Host authority beneath it is Default. */
-export type ApprovalMode = ServerApprovalMode | 'plan';
+/** Codex collaboration modes are independent of permission profiles. */
+export type CollaborationMode = 'default' | 'plan';
+
+/** @deprecated Use PermissionProfile. */
+export type ServerApprovalMode = PermissionProfile;
+
+/** @deprecated Use CollaborationMode and PermissionProfile separately. */
+export type ApprovalMode = CollaborationMode | PermissionProfile;
 
 export type AgentStatus = 'idle' | 'working' | 'waiting';
 

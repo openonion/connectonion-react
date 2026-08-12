@@ -1,42 +1,53 @@
-/** One-window readers for approval state written before the canonical vocabulary. */
+/** One-window readers for permission state written before Codex alignment. */
 
 import type {
-  ApprovalMode,
   ChatItem,
-  ServerApprovalMode,
+  CollaborationMode,
+  PermissionProfile,
   SessionState,
 } from './types';
 
-const CANONICAL_SERVER_MODES = new Set<ServerApprovalMode>([
-  'default',
-  'auto_approve',
-  'full_access',
+const CANONICAL_PERMISSION_PROFILES = new Set<PermissionProfile>([
+  ':read-only',
+  ':workspace',
+  ':danger-full-access',
 ]);
 
-const PREVIOUS_SERVER_MODES: Record<string, ServerApprovalMode> = {
-  safe: 'default',
-  accept_edits: 'auto_approve',
-  ulw: 'full_access',
+const PREVIOUS_PERMISSION_PROFILES: Record<string, PermissionProfile> = {
+  safe: ':read-only',
+  default: ':read-only',
+  accept_edits: ':workspace',
+  auto_approve: ':workspace',
+  ulw: ':danger-full-access',
+  full_access: ':danger-full-access',
 };
 
-export function isCanonicalServerApprovalMode(
+export function isCanonicalPermissionProfile(
   value: unknown,
-): value is ServerApprovalMode {
+): value is PermissionProfile {
   return typeof value === 'string'
-    && CANONICAL_SERVER_MODES.has(value as ServerApprovalMode);
+    && CANONICAL_PERMISSION_PROFILES.has(value as PermissionProfile);
 }
 
-export function normalizeServerApprovalMode(
+export function normalizePermissionProfile(
   value: unknown,
-): ServerApprovalMode | null {
-  if (isCanonicalServerApprovalMode(value)) return value;
-  return typeof value === 'string' ? PREVIOUS_SERVER_MODES[value] ?? null : null;
+): PermissionProfile | null {
+  if (isCanonicalPermissionProfile(value)) return value;
+  return typeof value === 'string'
+    ? PREVIOUS_PERMISSION_PROFILES[value] ?? null
+    : null;
 }
 
-function normalizeApprovalMode(value: unknown): ApprovalMode | undefined {
-  if (value === 'plan') return 'plan';
-  return normalizeServerApprovalMode(value) ?? undefined;
+export function normalizeCollaborationMode(
+  value: unknown,
+): CollaborationMode | null {
+  return value === 'default' || value === 'plan' ? value : null;
 }
+
+/** @deprecated Use isCanonicalPermissionProfile. */
+export const isCanonicalServerApprovalMode = isCanonicalPermissionProfile;
+/** @deprecated Use normalizePermissionProfile. */
+export const normalizeServerApprovalMode = normalizePermissionProfile;
 
 function nonNegativeInteger(value: unknown): value is number {
   return Number.isInteger(value) && typeof value === 'number' && value >= 0;
@@ -65,22 +76,24 @@ export function normalizeFullAccessCheckpointFrame(
     !nonNegativeInteger(raw.turns_used)
     || !positiveInteger(raw.max_turns)
     || raw.turns_used > raw.max_turns
-  ) {
-    return null;
-  }
+  ) return null;
   return { turnsUsed: raw.turns_used, maxTurns: raw.max_turns };
 }
 
-/** Normalize untrusted Host or localStorage state before it enters public state. */
+/** Normalize untrusted Host or localStorage state before public exposure. */
 export function normalizeSessionState(value: unknown): SessionState | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
   const normalized = { ...raw } as Record<string, unknown>;
 
-  const mode = Object.prototype.hasOwnProperty.call(raw, 'mode')
-    ? normalizeApprovalMode(raw.mode) ?? 'default'
+  const legacyPlan = raw.mode === 'plan';
+  const profile = Object.prototype.hasOwnProperty.call(raw, 'mode')
+    ? normalizePermissionProfile(raw.mode) ?? ':read-only'
     : undefined;
-  if (mode) normalized.mode = mode;
+  if (profile) normalized.mode = profile;
+  const collaborationMode = normalizeCollaborationMode(raw.collaboration_mode)
+    ?? (legacyPlan ? 'plan' : undefined);
+  if (collaborationMode) normalized.collaboration_mode = collaborationMode;
 
   if (
     normalized.full_access_turns == null
@@ -97,14 +110,14 @@ export function normalizeSessionState(value: unknown): SessionState | null {
 
   const turns = normalized.full_access_turns;
   const used = normalized.full_access_turns_used;
-  const validFullAccess = mode === 'full_access'
+  const validFullAccess = profile === ':danger-full-access'
     && positiveInteger(turns)
     && nonNegativeInteger(used)
     && used < turns;
   if (!validFullAccess) {
     delete normalized.full_access_turns;
     delete normalized.full_access_turns_used;
-    if (mode === 'full_access') normalized.mode = 'default';
+    if (profile === ':danger-full-access') normalized.mode = ':read-only';
   }
   return normalized as SessionState;
 }

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Separate Codex-aligned `default` / `plan` collaboration modes from Host
+  permission profiles `:read-only`, `:workspace`, and
+  `:danger-full-access`.
+- Add explicit `setCollaborationMode()` and acknowledged
+  `setPermissionProfile()` APIs. The deprecated synchronous `setMode()` can no
+  longer fabricate permission state or write the legacy Host frame.
+- Keep the standalone TypeScript SDK retired; React remains the browser
+  protocol owner and accepts previous IDs only at its compatibility reader.
+
 ## 0.4.0 — 2026-08-12
 
 This release makes `@connectonion/react` the browser's ACP ownership boundary. The

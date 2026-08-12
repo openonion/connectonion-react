@@ -4,13 +4,16 @@ import {
 } from '../src/connect/mode-compat';
 import { RemoteAgent } from '../src/connect/remote-agent';
 
-describe('previous approval vocabulary compatibility', () => {
+describe('previous permission vocabulary compatibility', () => {
   test.each([
-    ['safe', 'default'],
-    ['accept_edits', 'auto_approve'],
-    ['ulw', 'full_access'],
-  ])('normalizes session mode %s to %s', (previous, canonical) => {
-    const state = previous === 'ulw'
+    ['safe', ':read-only'],
+    ['default', ':read-only'],
+    ['accept_edits', ':workspace'],
+    ['auto_approve', ':workspace'],
+    ['ulw', ':danger-full-access'],
+    ['full_access', ':danger-full-access'],
+  ])('normalizes session profile %s to %s', (previous, canonical) => {
+    const state = previous === 'ulw' || previous === 'full_access'
       ? { mode: previous, ulw_turns: 20, ulw_turns_used: 4 }
       : { mode: previous };
     expect(normalizeSessionState(state)?.mode).toBe(canonical);
@@ -18,19 +21,26 @@ describe('previous approval vocabulary compatibility', () => {
 
   test.each([
     { mode: 'future', full_access_turns: 20, full_access_turns_used: 4 },
-    { mode: 'full_access', full_access_turns: 0, full_access_turns_used: 0 },
-    { mode: 'full_access', full_access_turns: 20, full_access_turns_used: 20 },
-    { mode: 'full_access', full_access_turns: 20.5, full_access_turns_used: 4 },
-  ])('fails malformed presentation state closed to Default', (state) => {
-    expect(normalizeSessionState(state)).toEqual({ mode: 'default' });
+    { mode: ':danger-full-access', full_access_turns: 0, full_access_turns_used: 0 },
+    { mode: ':danger-full-access', full_access_turns: 20, full_access_turns_used: 20 },
+    { mode: ':danger-full-access', full_access_turns: 20.5, full_access_turns_used: 4 },
+  ])('fails malformed presentation state closed to Read only', (state) => {
+    expect(normalizeSessionState(state)).toEqual({ mode: ':read-only' });
+  });
+
+  test('keeps Plan as collaboration state over Read only permission', () => {
+    expect(normalizeSessionState({ mode: 'plan' })).toEqual({
+      mode: ':read-only',
+      collaboration_mode: 'plan',
+    });
   });
 
   test('removes stale Full access counters outside Full access', () => {
     expect(normalizeSessionState({
-      mode: 'default',
+      mode: ':read-only',
       full_access_turns: 20,
       full_access_turns_used: 4,
-    })).toEqual({ mode: 'default' });
+    })).toEqual({ mode: ':read-only' });
   });
 
   test('moves previous Full access fields and drops their old keys', () => {
@@ -40,7 +50,7 @@ describe('previous approval vocabulary compatibility', () => {
       ulw_turns_used: 4,
       ulw_prompt: 'keep going',
     })).toEqual({
-      mode: 'full_access',
+      mode: ':danger-full-access',
       full_access_turns: 20,
       full_access_turns_used: 4,
     });
@@ -64,7 +74,7 @@ describe('previous approval vocabulary compatibility', () => {
     'exposes live %s as a canonical checkpoint card',
     (type) => {
       const agent = new RemoteAgent('0xmode-compat');
-      agent._currentSession = { mode: 'full_access' };
+      agent._currentSession = { mode: ':danger-full-access' };
       (agent as unknown as {
         _handleMessage: (event: { data: string }) => void;
       })._handleMessage({
