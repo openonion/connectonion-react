@@ -314,14 +314,14 @@ describe('useAgentForHuman hook', () => {
                 sessionId: 'mode-session',
                 update: {
                   sessionUpdate: 'current_mode_update',
-                  currentModeId: 'accept_edits',
+                  currentModeId: 'auto_approve',
                 },
               },
             },
           };
           setTimeout(() => this.onmessage?.({ data: JSON.stringify(frame) }), 0);
           setTimeout(() => this.onmessage?.({
-            data: JSON.stringify({ type: 'mode_changed', mode: 'accept_edits' }),
+            data: JSON.stringify({ type: 'mode_changed', mode: 'auto_approve' }),
           }), 1);
           setTimeout(() => this.onmessage?.({
             data: JSON.stringify({
@@ -343,7 +343,7 @@ describe('useAgentForHuman hook', () => {
         await flush();
       });
 
-      expect(result.current.mode).toBe('accept_edits');
+      expect(result.current.mode).toBe('auto_approve');
     });
 
     it('exposes advertised modes and waits for the acknowledged mode response', async () => {
@@ -367,7 +367,7 @@ describe('useAgentForHuman hook', () => {
               server_newer: true,
               session: {
                 session_id: 'mode-write-session',
-                mode: 'accept_edits',
+                mode: 'auto_approve',
                 messages: [],
               },
               carrier_capabilities: {
@@ -377,10 +377,10 @@ describe('useAgentForHuman hook', () => {
                 },
               },
               session_modes: {
-                currentModeId: 'safe',
+                currentModeId: 'default',
                 availableModes: [
-                  { id: 'safe', name: 'Safe' },
-                  { id: 'accept_edits', name: 'Auto' },
+                  { id: 'default', name: 'Safe' },
+                  { id: 'auto_approve', name: 'Auto' },
                 ],
               },
             };
@@ -410,23 +410,23 @@ describe('useAgentForHuman hook', () => {
         await flush();
       });
       expect(result.current.availableModes.map((mode) => mode.id)).toEqual([
-        'safe', 'accept_edits',
+        'default', 'auto_approve',
       ]);
-      expect(result.current.mode).toBe('safe');
+      expect(result.current.mode).toBe('default');
 
       let change!: Promise<void>;
       await act(async () => {
-        change = result.current.setSessionMode('accept_edits');
+        change = result.current.setSessionMode('auto_approve');
         await Promise.resolve();
       });
-      expect(result.current.mode).toBe('safe');
+      expect(result.current.mode).toBe('default');
       expect(result.current.modeChangePending).toBe(true);
       expect(sentFrames.find((frame) => frame.type === 'ACP_REQUEST')).toMatchObject({
         message: {
           method: 'session/set_mode',
           params: {
             sessionId: 'mode-write-session',
-            modeId: 'accept_edits',
+            modeId: 'auto_approve',
           },
         },
       });
@@ -435,7 +435,7 @@ describe('useAgentForHuman hook', () => {
         socket!.acknowledge();
         await change;
       });
-      expect(result.current.mode).toBe('accept_edits');
+      expect(result.current.mode).toBe('auto_approve');
       expect(result.current.modeChangePending).toBe(false);
       expect(result.current.error).toBeNull();
     });

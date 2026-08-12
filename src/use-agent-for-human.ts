@@ -26,7 +26,7 @@ import { getStore, type Message } from './store';
 /**
  * Return value of `useAgentForHuman`. Exposes all reactive state and every method
  * needed to drive a full chat UI — from sending a first prompt to handling
- * ULW (Unlimited Work) pauses and approval gates.
+ * Full access checkpoints and approval gates.
  *
  * This hook is designed for human users interacting with agents through a UI.
  * For agent-to-agent communication, use `connect()` directly.
@@ -88,7 +88,7 @@ export interface UseAgentForHumanReturn {
   checkSessionStatus: (sessionId: string) => Promise<RemoteSessionStatus>;
 
 
-  /** Current approval mode. Defaults to 'safe' when no session exists yet. */
+  /** Current approval mode. Defaults to 'default' when no session exists yet. */
   mode: ApprovalMode;
 
   /** Server-authorized ACP modes advertised for this authenticated session. */
@@ -97,11 +97,11 @@ export interface UseAgentForHumanReturn {
   /** True while one acknowledged ACP session mode transaction is outstanding. */
   modeChangePending: boolean;
 
-  /** Maximum turns before ULW mode pauses. null when mode is not 'ulw'. */
-  ulwTurns: number | null;
+  /** Maximum turns before Full access pauses. null outside Full access. */
+  fullAccessTurns: number | null;
 
-  /** Turns consumed so far in the current ULW window. null when mode is not 'ulw'. */
-  ulwTurnsUsed: number | null;
+  /** Turns consumed in the current Full access window. null outside Full access. */
+  fullAccessTurnsUsed: number | null;
 
   /**
    * Fire-and-forget: sends a user prompt to the agent. Updates flow back through
@@ -125,7 +125,7 @@ export interface UseAgentForHumanReturn {
   /**
    * Send a typed message to the agent over the WebSocket.
    * Use this for all response messages: ASK_USER_RESPONSE, APPROVAL_RESPONSE,
-   * PLAN_REVIEW_RESPONSE, ULW_RESPONSE, etc.
+   * PLAN_REVIEW_RESPONSE, FULL_ACCESS_RESPONSE, etc.
    */
   sendMessage: (message: OutgoingMessage) => void;
 
@@ -146,10 +146,10 @@ export interface UseAgentForHumanReturn {
   /**
    * Switch the agent's approval mode and sync the change to localStorage immediately
    * so it survives a page refresh before the next server-synced session snapshot arrives.
-   * Also initialises ULW turn counters locally when switching to 'ulw'.
+   * Also initialises Full access turn counters locally.
    *
    * @param mode - Target approval mode
-   * @param options.turns - Initial turn budget when switching to 'ulw' (default 100)
+   * @param options.turns - Initial turn budget for Full access (default 100)
    * @deprecated Use setSessionMode for acknowledged server policy. This legacy
    * compatibility operation can also carry the product-only plan alias.
    */
@@ -169,7 +169,7 @@ export interface UseAgentForHumanReturn {
  * React hook for a human user to interact with a remote AI agent.
  *
  * This is the primary hook for building chat UIs where a human drives the
- * conversation. It handles approval gates, ULW pauses, onboarding flows,
+ * conversation. It handles approval gates, Full access checkpoints, onboarding flows,
  * and session persistence — all concerns specific to human interaction.
  * For agent-to-agent communication, use `connect()` directly instead.
  *
@@ -414,12 +414,12 @@ export function useAgentForHuman(
   const setMode = (newMode: ApprovalMode, options?: { turns?: number }) => {
     agent.setMode(newMode, options);
     // Mirror the mode change into the Zustand store immediately so the UI reflects it
-    // before the next server-synced session arrives. ULW counters are also seeded here
+    // before the next server-synced session arrives. Full access counters are seeded here
     // so consumers can render a turn budget without waiting for the first response.
     const updates: Partial<SessionState> = { mode: newMode };
-    if (newMode === 'ulw') {
-      updates.ulw_turns = options?.turns || 100;
-      updates.ulw_turns_used = 0;
+    if (newMode === 'full_access') {
+      updates.full_access_turns = options?.turns || 100;
+      updates.full_access_turns_used = 0;
     }
     setSession(session
       ? { ...session, ...updates }
@@ -444,11 +444,11 @@ export function useAgentForHuman(
     dashboardHtml,
     profile,
     checkSessionStatus: (sid: string) => agent.checkSessionStatus(sid),
-    mode: session?.mode || 'safe',
+    mode: session?.mode || 'default',
     availableModes,
     modeChangePending,
-    ulwTurns: session?.ulw_turns ?? null,
-    ulwTurnsUsed: session?.ulw_turns_used ?? null,
+    fullAccessTurns: session?.full_access_turns ?? null,
+    fullAccessTurnsUsed: session?.full_access_turns_used ?? null,
     input,
     connect,
     sendMessage,

@@ -11,6 +11,7 @@
 import { create, StoreApi, UseBoundStore } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { ChatItem, AgentStatus, SessionState } from './connect';
+import { normalizeChatItems, normalizeSessionState } from './connect/mode-compat';
 
 // =============================================================================
 // Types
@@ -230,6 +231,18 @@ function createAgentStore(address: string, sessionId: string) {
       }),
       {
         name: `co:agent:${address}:session:${sessionId}`,
+        version: 1,
+        migrate: (persistedState: unknown) => {
+          if (!persistedState || typeof persistedState !== 'object') {
+            return persistedState as AgentState;
+          }
+          const state = persistedState as Record<string, unknown>;
+          return {
+            ...state,
+            ui: normalizeChatItems(state.ui),
+            session: normalizeSessionState(state.session),
+          } as AgentState;
+        },
         storage: createJSONStorage(() => {
           const ls = (globalThis as any).localStorage as WebStorageLike | undefined;
           return ls ? createResilientLocalStorage(ls) : (undefined as any);

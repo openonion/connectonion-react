@@ -11,6 +11,7 @@ export type {
   AgentOnboard,
   SkillInfo,
   ApprovalMode,
+  ServerApprovalMode,
   PlanEntry,
   PlanEntryPriority,
   PlanEntryStatus,
@@ -20,7 +21,6 @@ export type {
   ACPPlanUpdate,
   HostSessionModeState,
   ApprovalRejectMode,
-  ServerApprovalMode,
 } from './connect';
 
 export { fetchAgentInfo } from './connect';

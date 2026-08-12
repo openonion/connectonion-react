@@ -41,13 +41,19 @@
 import * as address from '../address';
 import {
   AgentInfo, AgentStatus, ApprovalMode, ChatItem, ChatItemType, ConnectionState,
-  ConnectOptions, PlanEntry, RemoteSessionStatus, ResolvedEndpoint, Response, SessionState, WebSocketCtor, WebSocketLike,
+  ConnectOptions, PlanEntry, RemoteSessionStatus, ResolvedEndpoint, Response, ServerApprovalMode, SessionState, WebSocketCtor, WebSocketLike,
 } from './types';
 import {
   AgentInfoSource, getWebSocketCtor, generateUUID, normalizeRelayUrl, resolveEndpoint, toAgentInfo,
 } from './endpoint';
 import { ensureKeys, signPayload } from './auth';
 import { mapEventToChatItem } from './chat-item-mapper';
+import {
+  isCanonicalServerApprovalMode,
+  normalizeChatItems,
+  normalizeFullAccessCheckpointFrame,
+  normalizeSessionState,
+} from './mode-compat';
 import {
   ACPPermissionRequest,
   ACPSetModeResponse,
@@ -67,7 +73,6 @@ import {
   hostSupportsACPCancel,
   normalizePlanEntries,
   parseServerApprovalMode,
-  ServerApprovalMode,
 } from './wire-events';
 
 interface PendingApproval {
@@ -174,7 +179,7 @@ export class RemoteAgent {
   get connectionState(): ConnectionState { return this._connectionState; }
   get currentSession(): SessionState | null { return this._currentSession; }
   get ui(): ChatItem[] { return this._chatItems; }
-  get mode(): ApprovalMode { return this._currentSession?.mode || 'safe'; }
+  get mode(): ApprovalMode { return this._currentSession?.mode || 'default'; }
   get plan(): ReadonlyArray<PlanEntry> {
     return this._currentSession?.plan?.map((entry) => ({ ...entry })) ?? [];
   }
@@ -344,7 +349,7 @@ export class RemoteAgent {
     } else if (
       message.type === 'APPROVAL_RESPONSE' ||
       message.type === 'PLAN_REVIEW_RESPONSE' ||
-      message.type === 'ULW_RESPONSE' ||
+      message.type === 'FULL_ACCESS_RESPONSE' ||
       message.type === 'ONBOARD_SUBMIT'
     ) {
       this._status = 'working';
@@ -422,7 +427,7 @@ export class RemoteAgent {
   /** Change durable Host policy only after one owned ACP acknowledgement. */
   async setSessionMode(mode: ServerApprovalMode): Promise<void> {
     try {
-      if (parseServerApprovalMode(mode) !== mode) {
+      if (!isCanonicalServerApprovalMode(mode)) {
         throw new Error(`Unsupported server session mode: ${String(mode)}`);
       }
       if (this._pendingModeChange) {
@@ -488,13 +493,13 @@ export class RemoteAgent {
     } else {
       this._currentSession.mode = mode;
     }
-    if (mode === 'ulw') {
-      this._currentSession.ulw_turns = options?.turns || 100;
-      this._currentSession.ulw_turns_used = 0;
+    if (mode === 'full_access') {
+      this._currentSession.full_access_turns = options?.turns || 100;
+      this._currentSession.full_access_turns_used = 0;
     }
     if (this._ws) {
       const msg: Record<string, unknown> = { type: 'mode_change', mode };
-      if (mode === 'ulw' && options?.turns) msg.turns = options.turns;
+      if (mode === 'full_access' && options?.turns) msg.turns = options.turns;
       this._ws.send(JSON.stringify(msg));
     }
   }
@@ -533,9 +538,10 @@ export class RemoteAgent {
    * plan erase the last valid ACP state during a rolling Host upgrade.
    */
   private _applySessionSnapshot(value: unknown): void {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+    const canonical = normalizeSessionState(value);
+    if (!canonical) return;
     const raw = value as Record<string, unknown>;
-    const snapshot = { ...raw } as SessionState;
+    const snapshot = { ...canonical };
     const sameSession = typeof raw.session_id === 'string'
       && raw.session_id.length > 0
       && raw.session_id === this._currentSession?.session_id;
@@ -697,7 +703,8 @@ export class RemoteAgent {
   // after the last user message the server knows about. Naive
   // [...userItems, ...serverNonUserItems] reorders into [user, user, agent, agent]
   // when the client added an optimistic user before reconnecting.
-  private _mergeServerChatItems(serverItems: ChatItem[]): void {
+  private _mergeServerChatItems(value: unknown): void {
+    const serverItems = normalizeChatItems(value);
     const serverUserCount = serverItems.filter(i => i.type === 'user').length;
     let seen = 0;
     let cutoff = this._chatItems.length;
@@ -949,16 +956,16 @@ export class RemoteAgent {
       return;
     }
 
-    // ULW turns reached
-    if (data?.type === 'ulw_turns_reached') {
+    const fullAccessCheckpoint = normalizeFullAccessCheckpointFrame(data);
+    if (fullAccessCheckpoint) {
       this._status = 'waiting';
       if (this._currentSession) {
-        this._currentSession.ulw_turns_used = data.turns_used;
+        this._currentSession.full_access_turns_used = fullAccessCheckpoint.turnsUsed;
       }
       this._addChatItem({
-        type: 'ulw_turns_reached',
-        turns_used: data.turns_used as number,
-        max_turns: data.max_turns as number,
+        type: 'full_access_checkpoint',
+        turns_used: fullAccessCheckpoint.turnsUsed,
+        max_turns: fullAccessCheckpoint.maxTurns,
       });
     }
 

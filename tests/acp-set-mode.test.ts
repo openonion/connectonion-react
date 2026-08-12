@@ -18,10 +18,10 @@ class FakeSocket {
 }
 
 function connected(
-  currentModeId = 'safe',
+  currentModeId = 'default',
   availableModes: Array<Record<string, unknown>> = [
-    { id: 'safe', name: 'Safe', description: 'Ask before side effects.' },
-    { id: 'accept_edits', name: 'Auto' },
+    { id: 'default', name: 'Default', description: 'Ask before sensitive tool calls.' },
+    { id: 'auto_approve', name: 'Auto-approve' },
   ],
 ): Record<string, unknown> {
   return {
@@ -60,7 +60,7 @@ function harness(capability = connected()) {
   const agent = new RemoteAgent(`0x${'a'.repeat(64)}`) as any;
   const socket = new FakeSocket();
   agent._ws = socket;
-  agent._currentSession = { session_id: SESSION_ID, mode: 'safe', turn: 4 };
+  agent._currentSession = { session_id: SESSION_ID, mode: 'default', turn: 4 };
   const deliver = (frame: object) => {
     agent._handleMessage({ data: JSON.stringify(frame) });
   };
@@ -70,7 +70,7 @@ function harness(capability = connected()) {
 }
 
 async function pendingRequest(agent: RemoteAgent) {
-  const promise = agent.setSessionMode('accept_edits');
+  const promise = agent.setSessionMode('auto_approve');
   await Promise.resolve();
   return promise;
 }
@@ -78,28 +78,43 @@ async function pendingRequest(agent: RemoteAgent) {
 describe('Host ACP session mode capability', () => {
   test('parses one exact advertised SessionModeState', () => {
     expect(hostSessionModeState(connected())).toEqual({
-      currentModeId: 'safe',
+      currentModeId: 'default',
       availableModes: [
-        { id: 'safe', name: 'Safe', description: 'Ask before side effects.' },
-        { id: 'accept_edits', name: 'Auto' },
+        { id: 'default', name: 'Default', description: 'Ask before sensitive tool calls.' },
+        { id: 'auto_approve', name: 'Auto-approve', description: 'Apply named edits without asking; retain other policy checks.' },
+      ],
+    });
+  });
+
+  test('normalizes previous Host capability IDs without exposing old labels', () => {
+    expect(hostSessionModeState(connected('safe', [
+      { id: 'safe', name: 'Safe' },
+      { id: 'accept_edits', name: 'Auto' },
+      { id: 'ulw', name: 'ULW' },
+    ]))).toEqual({
+      currentModeId: 'default',
+      availableModes: [
+        { id: 'default', name: 'Default', description: 'Ask before sensitive tool calls.' },
+        { id: 'auto_approve', name: 'Auto-approve', description: 'Apply named edits without asking; retain other policy checks.' },
+        { id: 'full_access', name: 'Full access (YOLO)', description: 'Skip tool approval and continue to the configured checkpoint.' },
       ],
     });
   });
 
   test('keeps advertised mode authoritative over a stale reconnect snapshot', () => {
     const frame = {
-      ...connected('safe'),
+      ...connected('default'),
       server_newer: true,
       session: {
         session_id: SESSION_ID,
-        mode: 'accept_edits',
+        mode: 'auto_approve',
         messages: [],
       },
     };
 
     const { agent } = harness(frame);
 
-    expect(agent.mode).toBe('safe');
+    expect(agent.mode).toBe('default');
   });
 
   test.each([
@@ -107,12 +122,12 @@ describe('Host ACP session mode capability', () => {
       ...connected(), carrier_capabilities: { acp: { schema: 'schema-v1.19.0' } },
     }],
     ['legacy plan alias', connected('plan')],
-    ['unknown mode', connected('safe', [{ id: 'future', name: 'Future' }])],
-    ['duplicate mode', connected('safe', [
-      { id: 'safe', name: 'Safe' }, { id: 'safe', name: 'Again' },
+    ['unknown mode', connected('default', [{ id: 'future', name: 'Future' }])],
+    ['duplicate mode', connected('default', [
+      { id: 'default', name: 'Default' }, { id: 'default', name: 'Again' },
     ])],
-    ['current mode not advertised', connected('accept_edits', [
-      { id: 'safe', name: 'Safe' },
+    ['current mode not advertised', connected('auto_approve', [
+      { id: 'default', name: 'Default' },
     ])],
   ])('rejects %s', (_name, frame) => {
     expect(hostSessionModeState(frame as Record<string, unknown>)).toBeNull();
@@ -128,14 +143,14 @@ describe('acknowledged ACP session/set_mode', () => {
     const requestId = request.message.id as string;
 
     expect(request).toEqual(
-      acpSetSessionModeFrame(requestId, SESSION_ID, 'accept_edits'),
+      acpSetSessionModeFrame(requestId, SESSION_ID, 'auto_approve'),
     );
-    expect(agent.mode).toBe('safe');
+    expect(agent.mode).toBe('default');
     expect(agent.modeChangePending).toBe(true);
 
     deliver(response(requestId));
     await expect(promise).resolves.toBeUndefined();
-    expect(agent.mode).toBe('accept_edits');
+    expect(agent.mode).toBe('auto_approve');
     expect(agent.currentSession).toMatchObject({ turn: 4 });
     expect(agent.modeChangePending).toBe(false);
   });
@@ -155,7 +170,7 @@ describe('acknowledged ACP session/set_mode', () => {
       code: -32000,
       data: { retryable: true },
     });
-    expect(agent.mode).toBe('safe');
+    expect(agent.mode).toBe('default');
     expect(agent.modeChangePending).toBe(false);
   });
 
@@ -172,7 +187,7 @@ describe('acknowledged ACP session/set_mode', () => {
     } }));
 
     await expect(promise).rejects.toThrow('Malformed or wrong-session');
-    expect(agent.mode).toBe('safe');
+    expect(agent.mode).toBe('default');
   });
 
   test('rejects a matching response bound to another session', async () => {
@@ -184,7 +199,7 @@ describe('acknowledged ACP session/set_mode', () => {
     deliver(response(requestId, { result: {} }, 'other-session'));
 
     await expect(promise).rejects.toThrow('wrong-session');
-    expect(agent.mode).toBe('safe');
+    expect(agent.mode).toBe('default');
   });
 
   test('allows only one in-flight mode transaction', async () => {
@@ -192,7 +207,7 @@ describe('acknowledged ACP session/set_mode', () => {
     const first = pendingRequest(agent);
     await Promise.resolve();
 
-    await expect(agent.setSessionMode('safe')).rejects.toThrow(
+    await expect(agent.setSessionMode('default')).rejects.toThrow(
       'already pending',
     );
     const requestId = sent()[0].message.id as string;
@@ -210,11 +225,11 @@ describe('acknowledged ACP session/set_mode', () => {
   });
 
   test('rejects a mode the authenticated Host did not advertise', async () => {
-    const { agent, sent } = harness(connected('safe', [
-      { id: 'safe', name: 'Safe' },
+    const { agent, sent } = harness(connected('default', [
+      { id: 'default', name: 'Safe' },
     ]));
 
-    await expect(agent.setSessionMode('accept_edits')).rejects.toThrow(
+    await expect(agent.setSessionMode('auto_approve')).rejects.toThrow(
       'not available',
     );
     expect(sent()).toEqual([]);
@@ -225,11 +240,11 @@ describe('acknowledged ACP session/set_mode', () => {
     delete (old as any).session_modes;
     const { agent, sent } = harness(old);
 
-    await expect(agent.setSessionMode('accept_edits')).rejects.toThrow(
+    await expect(agent.setSessionMode('auto_approve')).rejects.toThrow(
       'does not support',
     );
     expect(sent()).toEqual([]);
-    expect(agent.mode).toBe('safe');
+    expect(agent.mode).toBe('default');
   });
 
   test('connection loss rejects the owned request without changing mode', async () => {
@@ -240,7 +255,7 @@ describe('acknowledged ACP session/set_mode', () => {
     raw._handleConnectionLoss();
 
     await expect(promise).rejects.toThrow('before session mode acknowledgement');
-    expect(agent.mode).toBe('safe');
+    expect(agent.mode).toBe('default');
     expect(agent.availableModes).toEqual([]);
   });
 
@@ -248,13 +263,13 @@ describe('acknowledged ACP session/set_mode', () => {
     jest.useFakeTimers();
     try {
       const { agent } = harness();
-      const promise = agent.setSessionMode('accept_edits');
+      const promise = agent.setSessionMode('auto_approve');
       await Promise.resolve();
 
       jest.advanceTimersByTime(30000);
 
       await expect(promise).rejects.toThrow('timed out');
-      expect(agent.mode).toBe('safe');
+      expect(agent.mode).toBe('default');
       expect(agent.modeChangePending).toBe(false);
       expect(agent.error?.message).toContain('timed out');
     } finally {

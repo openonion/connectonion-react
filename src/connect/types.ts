@@ -14,7 +14,7 @@ export interface Response {
   done: boolean;
 }
 
-export type ChatItemType = 'user' | 'agent' | 'thinking' | 'tool_call' | 'ask_user' | 'approval_needed' | 'onboard_required' | 'onboard_success' | 'intent' | 'eval' | 'compact' | 'tool_blocked' | 'ulw_turns_reached' | 'plan_review' | 'files_received';
+export type ChatItemType = 'user' | 'agent' | 'thinking' | 'tool_call' | 'ask_user' | 'approval_needed' | 'onboard_required' | 'onboard_success' | 'intent' | 'eval' | 'compact' | 'tool_blocked' | 'full_access_checkpoint' | 'plan_review' | 'files_received';
 
 export interface AskUserField {
   name: string;
@@ -38,7 +38,7 @@ export type ChatItem =
   | { id: string; type: 'eval'; status: 'evaluating' | 'done'; passed?: boolean; summary?: string; expected?: string; eval_path?: string }
   | { id: string; type: 'compact'; status: 'compacting' | 'done' | 'error'; context_before?: number; context_after?: number; context_percent?: number; message?: string; error?: string }
   | { id: string; type: 'tool_blocked'; tool: string; reason: string; message: string; command?: string }
-  | { id: string; type: 'ulw_turns_reached'; turns_used: number; max_turns: number }
+  | { id: string; type: 'full_access_checkpoint'; turns_used: number; max_turns: number }
   | { id: string; type: 'plan_review'; plan_content: string }
   | { id: string; type: 'files_received'; files: Array<{ name: string; path: string }> };
 
@@ -140,14 +140,17 @@ export interface SessionState {
   turn?: number;
   /** Latest full ACP plan snapshot. An empty array explicitly clears the plan. */
   plan?: ReadonlyArray<PlanEntry>;
-  mode?: 'safe' | 'plan' | 'accept_edits' | 'ulw';
-  /** ULW mode: max turns before pausing */
-  ulw_turns?: number;
-  /** ULW mode: turns used so far */
-  ulw_turns_used?: number;
+  mode?: ApprovalMode;
+  /** Full access: max turns before pausing at a checkpoint. */
+  full_access_turns?: number;
+  /** Full access: turns used in the current checkpoint window. */
+  full_access_turns_used?: number;
 }
 
-export type ApprovalMode = 'safe' | 'plan' | 'accept_edits' | 'ulw';
+export type ServerApprovalMode = 'default' | 'auto_approve' | 'full_access';
+
+/** Plan is product workflow state; the Host authority beneath it is Default. */
+export type ApprovalMode = ServerApprovalMode | 'plan';
 
 export type AgentStatus = 'idle' | 'working' | 'waiting';
 

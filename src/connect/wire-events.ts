@@ -12,7 +12,8 @@ import type {
   SetSessionModeResponse,
   ToolCallStatus,
 } from '@agentclientprotocol/sdk';
-import type { ApprovalMode, PlanEntry } from './types';
+import type { PlanEntry, ServerApprovalMode } from './types';
+import { normalizeServerApprovalMode } from './mode-compat';
 
 const ACP_SCHEMA_VERSION = 'schema-v1.19.0';
 const TOOL_STATUSES = new Set(['pending', 'in_progress', 'completed', 'failed']);
@@ -22,11 +23,23 @@ const PLAN_STATUSES = new Set<PlanEntry['status']>([
   'in_progress',
   'completed',
 ]);
-const SERVER_APPROVAL_MODES = new Set<ServerApprovalMode>([
-  'safe',
-  'accept_edits',
-  'ulw',
-]);
+const SESSION_MODES: Record<ServerApprovalMode, SessionMode> = {
+  default: {
+    id: 'default',
+    name: 'Default',
+    description: 'Ask before sensitive tool calls.',
+  },
+  auto_approve: {
+    id: 'auto_approve',
+    name: 'Auto-approve',
+    description: 'Apply named edits without asking; retain other policy checks.',
+  },
+  full_access: {
+    id: 'full_access',
+    name: 'Full access (YOLO)',
+    description: 'Skip tool approval and continue to the configured checkpoint.',
+  },
+};
 const HOST_PERMISSION_KINDS = new Map<string, PermissionOption['kind']>([
   ['allow_once', 'allow_once'],
   ['allow_session', 'allow_always'],
@@ -53,8 +66,6 @@ export interface ACPPermissionRequest {
   rawInput: Record<string, unknown>;
   options: PermissionOption[];
 }
-
-export type ServerApprovalMode = Exclude<ApprovalMode, 'plan'>;
 
 export interface ACPModeUpdate {
   sessionId: string;
@@ -129,13 +140,7 @@ export function hostSessionModeState(
       && typeof mode.description !== 'string'
     ) return null;
     seen.add(id);
-    availableModes.push({
-      id,
-      name: mode.name,
-      ...(typeof mode.description === 'string'
-        ? { description: mode.description }
-        : {}),
-    });
+    availableModes.push({ ...SESSION_MODES[id] });
   }
   if (!seen.has(currentModeId)) return null;
   return { currentModeId, availableModes };
@@ -332,10 +337,7 @@ export function acpPermissionCancelledFrame(
 export function parseServerApprovalMode(
   value: unknown,
 ): ServerApprovalMode | null {
-  return typeof value === 'string'
-    && SERVER_APPROVAL_MODES.has(value as ServerApprovalMode)
-    ? value as ServerApprovalMode
-    : null;
+  return normalizeServerApprovalMode(value);
 }
 
 /** Decode an authoritative server mode observation, never a policy grant. */

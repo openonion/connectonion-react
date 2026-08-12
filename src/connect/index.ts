@@ -15,7 +15,6 @@ export type {
   ACPPlanUpdate,
   HostSessionModeState,
   ApprovalRejectMode,
-  ServerApprovalMode,
 } from './wire-events';
 export { fetchAgentInfo } from './endpoint';
 export { RemoteAgent } from './remote-agent';

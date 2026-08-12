@@ -59,13 +59,13 @@ const {
   setSessionMode,
 } = useAgentForHuman(address, sessionId)
 
-await setSessionMode('accept_edits')
+await setSessionMode('auto_approve')
 ```
 
 `setSessionMode` owns ACP request IDs, session correlation, acknowledgement validation,
 timeouts, and disconnect handling. It rejects without changing `mode` when the Host
 refuses or the outcome is unknown. `plan` is not a server policy and is never accepted by
-this API; products may layer a Plan workflow over an acknowledged Host `safe` mode.
+this API; products may layer a Plan workflow over an acknowledged Host `default` mode.
 
 The old `setMode(mode, { turns })` remains temporarily for source compatibility but is
 optimistic and deprecated. New React applications must not use it or construct ACP frames.

@@ -34,7 +34,7 @@ function deliver(agent: RemoteAgent, frame: Record<string, unknown>): void {
 }
 
 describe('ACP current_mode_update decoding', () => {
-  it.each(['safe', 'accept_edits', 'ulw'] as const)(
+  it.each(['default', 'auto_approve', 'full_access'] as const)(
     'accepts the persisted server mode %s',
     (mode) => {
       expect(decodeACPModeUpdate(modeFrame(mode))).toEqual({
@@ -45,15 +45,26 @@ describe('ACP current_mode_update decoding', () => {
   );
 
   it.each([
+    ['safe', 'default'],
+    ['accept_edits', 'auto_approve'],
+    ['ulw', 'full_access'],
+  ] as const)('normalizes the previous mode %s to %s', (previous, canonical) => {
+    expect(decodeACPModeUpdate(modeFrame(previous))).toEqual({
+      sessionId: SESSION_ID,
+      mode: canonical,
+    });
+  });
+
+  it.each([
     ['legacy plan alias', modeFrame('plan')],
     ['unknown mode', modeFrame('future')],
     ['empty mode', modeFrame('')],
-    ['missing session', modeFrame('safe', '')],
+    ['missing session', modeFrame('default', '')],
     ['null frame', null],
     ['array frame', []],
-    ['wrong schema', { ...modeFrame('safe'), acpSchema: 'schema-v1.20.0' }],
+    ['wrong schema', { ...modeFrame('default'), acpSchema: 'schema-v1.20.0' }],
     ['wrong method', {
-      ...modeFrame('safe'),
+      ...modeFrame('default'),
       message: { jsonrpc: '2.0', method: 'session/mode', params: {} },
     }],
   ])('rejects %s', (_name, frame) => {
@@ -61,10 +72,11 @@ describe('ACP current_mode_update decoding', () => {
   });
 
   it('uses the same known-mode predicate for legacy frames', () => {
-    expect(parseServerApprovalMode('safe')).toBe('safe');
+    expect(parseServerApprovalMode('default')).toBe('default');
+    expect(parseServerApprovalMode('safe')).toBe('default');
     expect(parseServerApprovalMode('plan')).toBeNull();
     expect(parseServerApprovalMode('future')).toBeNull();
-    expect(parseServerApprovalMode({ mode: 'ulw' })).toBeNull();
+    expect(parseServerApprovalMode({ mode: 'full_access' })).toBeNull();
   });
 });
 
@@ -73,7 +85,7 @@ describe('RemoteAgent authoritative mode state', () => {
     const remote = new RemoteAgent('0xmode');
     remote._currentSession = {
       session_id: SESSION_ID,
-      mode: 'safe',
+      mode: 'default',
       turn: 7,
     };
     return remote;
@@ -82,12 +94,12 @@ describe('RemoteAgent authoritative mode state', () => {
   it('updates the public mode while preserving the session snapshot', () => {
     const remote = agent();
 
-    deliver(remote, modeFrame('accept_edits'));
+    deliver(remote, modeFrame('auto_approve'));
 
-    expect(remote.mode).toBe('accept_edits');
+    expect(remote.mode).toBe('auto_approve');
     expect(remote.currentSession).toMatchObject({
       session_id: SESSION_ID,
-      mode: 'accept_edits',
+      mode: 'auto_approve',
       turn: 7,
     });
   });
@@ -95,9 +107,9 @@ describe('RemoteAgent authoritative mode state', () => {
   it('ignores a valid update owned by another session', () => {
     const remote = agent();
 
-    deliver(remote, modeFrame('ulw', 'another-session'));
+    deliver(remote, modeFrame('full_access', 'another-session'));
 
-    expect(remote.mode).toBe('safe');
+    expect(remote.mode).toBe('default');
   });
 
   it('deduplicates the ACP and legacy representations', () => {
@@ -105,19 +117,19 @@ describe('RemoteAgent authoritative mode state', () => {
     const onMessage = jest.fn();
     remote.onMessage = onMessage;
 
-    deliver(remote, modeFrame('ulw'));
-    deliver(remote, { type: 'mode_changed', mode: 'ulw' });
+    deliver(remote, modeFrame('full_access'));
+    deliver(remote, { type: 'mode_changed', mode: 'full_access' });
 
-    expect(remote.mode).toBe('ulw');
+    expect(remote.mode).toBe('full_access');
     expect(onMessage).toHaveBeenCalledTimes(1);
   });
 
   it('still accepts a valid legacy-only Host update', () => {
     const remote = agent();
 
-    deliver(remote, { type: 'mode_changed', mode: 'accept_edits' });
+    deliver(remote, { type: 'mode_changed', mode: 'auto_approve' });
 
-    expect(remote.mode).toBe('accept_edits');
+    expect(remote.mode).toBe('auto_approve');
   });
 
   it.each(['plan', 'future', '', null])(
@@ -127,7 +139,7 @@ describe('RemoteAgent authoritative mode state', () => {
 
       deliver(remote, { type: 'mode_changed', mode });
 
-      expect(remote.mode).toBe('safe');
+      expect(remote.mode).toBe('default');
     },
   );
 });

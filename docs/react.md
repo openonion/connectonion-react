@@ -128,13 +128,13 @@ Host's exact advertised choices and an acknowledged setter:
 
 ```tsx
 const {
-  mode,               // 'safe' | 'accept_edits' | 'ulw'
+  mode,               // 'default' | 'auto_approve' | 'full_access'
   availableModes,     // Host-advertised SessionMode[]
   modeChangePending,
   setSessionMode,
 } = useAgentForHuman(address, sessionId)
 
-async function choose(modeId: 'safe' | 'accept_edits' | 'ulw') {
+async function choose(modeId: 'default' | 'auto_approve' | 'full_access') {
   await setSessionMode(modeId)
 }
 ```
@@ -144,7 +144,7 @@ new prompt submission while `modeChangePending` is true. The promise resolves on
 matching Host acknowledgement; a rejection, malformed response, timeout, or disconnect
 leaves `mode` unchanged. Reconnect before retrying an unknown timeout/disconnect outcome.
 
-Plan is product workflow state over an acknowledged `safe` policy. It is deliberately
+Plan is product workflow state over an acknowledged `default` policy. It is deliberately
 excluded from `ServerApprovalMode` and must never be sent as `session/set_mode`.
 
 ### Current plan
