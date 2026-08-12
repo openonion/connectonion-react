@@ -47,6 +47,8 @@ export type WebSocketLike = {
   onmessage: ((ev: { data: unknown }) => unknown) | null;
   onerror: ((ev: unknown) => unknown) | null;
   onclose: ((ev: unknown) => unknown) | null;
+  /** Browser and `ws` sockets expose this; optional keeps custom test transports compatible. */
+  readonly readyState?: number;
   send(data: unknown): void;
   close(): void;
 };

@@ -390,7 +390,10 @@ export function useAgentForHuman(
     if ((agent as any)._chatItems.length === 0 && ui.length > 0) {
       (agent as any)._chatItems = [...ui];
     }
-    agent.reconnect(sessionId);  // non-blocking — updates come via onMessage
+    // Reconnect failures are already mirrored into agent.error. Consume the
+    // fire-and-forget promise so browser recovery events cannot leak an
+    // unhandled rejection to the page.
+    agent.reconnect(sessionId).catch(() => {});
   };
 
   // Open the WebSocket without sending input, so a landing/draft view receives the

@@ -1,0 +1,217 @@
+import { RemoteAgent } from '../src/connect/remote-agent';
+
+const SESSION_ID = 'reconnect-session';
+
+class FakeSocket {
+  static instances: FakeSocket[] = [];
+
+  onopen = null;
+  onmessage = null;
+  onerror = null;
+  onclose = null;
+  readyState = 0;
+  closeCalls = 0;
+  sendCalls = 0;
+
+  constructor(_url = '') {
+    FakeSocket.instances.push(this);
+  }
+
+  send(): void {
+    this.sendCalls += 1;
+    if (this.readyState !== 1) {
+      throw new Error('raw WebSocket InvalidStateError');
+    }
+  }
+
+  close(): void {
+    this.closeCalls += 1;
+    this.readyState = 3;
+  }
+}
+
+function remoteAgent() {
+  const agent = new RemoteAgent('agent-name', {
+    directUrl: 'https://agent.example',
+    wsCtor: FakeSocket as any,
+    keys: {
+      address: `0x${'a'.repeat(64)}`,
+      shortAddress: '0xaaaa...aaaa',
+      publicKey: new Uint8Array(32),
+      privateKey: new Uint8Array(64),
+    },
+  }) as any;
+  agent._currentSession = { session_id: SESSION_ID };
+  return agent;
+}
+
+describe('RemoteAgent reconnect races', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    FakeSocket.instances = [];
+  });
+
+  afterEach(() => {
+    jest.clearAllTimers();
+    jest.useRealTimers();
+  });
+
+  test('reconnect is a no-op for an authenticated open session', async () => {
+    const agent = remoteAgent();
+    const socket = new FakeSocket();
+    socket.readyState = 1;
+    agent._ws = socket;
+    agent._authenticated = true;
+    agent._connectionState = 'connected';
+    // Hosts may canonicalize the caller's route ID. The live RemoteAgent still
+    // owns that one session and must not tear it down to reconcile two names.
+    agent._currentSession = { session_id: 'server-session-id' };
+
+    await expect(agent.reconnect(SESSION_ID)).resolves.toEqual({
+      text: '',
+      done: true,
+    });
+
+    expect(socket.closeCalls).toBe(0);
+    expect(FakeSocket.instances).toHaveLength(1);
+    expect(agent.connectionState).toBe('connected');
+  });
+
+  test('reconnect shares an in-flight eager connect', async () => {
+    const agent = remoteAgent();
+
+    const connecting = agent.connect().catch(() => undefined);
+    const reconnecting = agent.reconnect(SESSION_ID).catch(() => undefined);
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(FakeSocket.instances).toHaveLength(1);
+
+    agent.reset();
+    void connecting;
+    void reconnecting;
+  });
+
+  test('eager connect shares an in-flight hydration reconnect', async () => {
+    const agent = remoteAgent();
+
+    const reconnecting = agent.reconnect(SESSION_ID).catch(() => undefined);
+    const connecting = agent.connect().catch(() => undefined);
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(FakeSocket.instances).toHaveLength(1);
+
+    agent.reset();
+    void reconnecting;
+    void connecting;
+  });
+
+  test('two rapid reconnect requests share one attempt', async () => {
+    const agent = remoteAgent();
+
+    const first = agent.reconnect(SESSION_ID).catch(() => undefined);
+    const second = agent.reconnect(SESSION_ID).catch(() => undefined);
+
+    expect(agent.connectionState).toBe('reconnecting');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(FakeSocket.instances).toHaveLength(1);
+
+    agent.reset();
+    void first;
+    void second;
+  });
+
+  test('an idle CONNECTED frame completes reconnect readiness', async () => {
+    const agent = remoteAgent();
+    const reconnecting = agent.reconnect(SESSION_ID);
+    await Promise.resolve();
+    await Promise.resolve();
+    const socket = FakeSocket.instances[0] as any;
+    socket.readyState = 1;
+    socket.onopen?.({});
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: 'CONNECTED',
+        session_id: 'server-session-id',
+        status: 'idle',
+      }),
+    });
+
+    await expect(reconnecting).resolves.toEqual({ text: '', done: true });
+    expect(agent.connectionState).toBe('connected');
+    expect(agent.status).toBe('idle');
+  });
+
+  test('send rejects through React state before touching a non-open socket', () => {
+    const agent = remoteAgent();
+    const socket = new FakeSocket();
+    agent._ws = socket;
+    agent._authenticated = true;
+
+    expect(() => agent.send({
+      type: 'ASK_USER_RESPONSE',
+      answer: 'continue',
+    })).toThrow('Agent connection is not ready');
+
+    expect(socket.sendCalls).toBe(0);
+    expect(agent.error?.message).toBe('Agent connection is not ready');
+    expect(agent.status).toBe('idle');
+    expect(agent.ui).not.toContainEqual(
+      expect.objectContaining({ id: '__optimistic__' }),
+    );
+  });
+
+  test('input never exposes a raw send error if readiness changes after connect', async () => {
+    const agent = remoteAgent();
+    const socket = new FakeSocket();
+    agent._ws = socket;
+    agent._authenticated = true;
+    agent._ensureConnected = jest.fn().mockResolvedValue(undefined);
+
+    await expect(agent.input('hello')).rejects.toThrow(
+      'Agent connection is not ready',
+    );
+
+    expect(socket.sendCalls).toBe(0);
+    expect(agent.error?.message).toBe('Agent connection is not ready');
+    expect(agent.status).toBe('idle');
+    expect(agent.ui).not.toContainEqual(
+      expect.objectContaining({ id: '__optimistic__' }),
+    );
+  });
+
+  test('connect does not reuse an authenticated socket that is no longer open', async () => {
+    const agent = remoteAgent();
+    const stale = new FakeSocket();
+    stale.readyState = 3;
+    agent._ws = stale;
+    agent._authenticated = true;
+
+    const connecting = agent.connect().catch(() => undefined);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(stale.closeCalls).toBe(1);
+    expect(FakeSocket.instances).toHaveLength(2);
+
+    agent.reset();
+    void connecting;
+  });
+
+  test('onboarding can answer on an open socket before authentication', () => {
+    const agent = remoteAgent();
+    const socket = new FakeSocket();
+    socket.readyState = 1;
+    agent._ws = socket;
+    agent._authenticated = false;
+
+    expect(() => agent.send({
+      type: 'ONBOARD_SUBMIT',
+      invite_code: 'invite-code',
+    })).not.toThrow();
+
+    expect(socket.sendCalls).toBe(1);
+  });
+});
