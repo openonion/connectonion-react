@@ -418,8 +418,11 @@ export function useAgentForHuman(
     // so consumers can render a turn budget without waiting for the first response.
     const updates: Partial<SessionState> = { mode: newMode };
     if (newMode === 'full_access') {
-      updates.full_access_turns = options?.turns || 100;
+      updates.full_access_turns = options?.turns ?? 100;
       updates.full_access_turns_used = 0;
+    } else {
+      updates.full_access_turns = undefined;
+      updates.full_access_turns_used = undefined;
     }
     setSession(session
       ? { ...session, ...updates }

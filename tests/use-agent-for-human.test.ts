@@ -13,6 +13,7 @@
 
 import { renderHook, act } from '@testing-library/react';
 import { useAgentForHuman } from '../src';
+import { getStore } from '../src/store';
 
 // Mock browser identity to skip signing
 jest.mock('../src/address-browser', () => ({
@@ -581,6 +582,46 @@ describe('useAgentForHuman hook', () => {
   });
 
   describe('session persistence', () => {
+    it('hydrates a v1 approval session through the v2 vocabulary migration', async () => {
+      const addr = uniqueAddr();
+      const sessionId = 'legacy-mode-session';
+      const key = `co:agent:${addr}:session:${sessionId}`;
+      mockLocalStorage.setItem(key, JSON.stringify({
+        version: 1,
+        state: {
+          messages: [],
+          ui: [{
+            id: 'checkpoint-1',
+            type: 'ulw_turns_reached',
+            turns_used: 4,
+            max_turns: 20,
+          }],
+          session: {
+            session_id: sessionId,
+            mode: 'ulw',
+            ulw_turns: 20,
+            ulw_turns_used: 4,
+          },
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      }));
+
+      const store = getStore(addr, sessionId);
+      await (store as typeof store & {
+        persist: { rehydrate: () => Promise<void> };
+      }).persist.rehydrate();
+
+      expect(store.getState().session).toMatchObject({
+        mode: 'full_access',
+        full_access_turns: 20,
+        full_access_turns_used: 4,
+      });
+      expect(store.getState().ui).toEqual([expect.objectContaining({
+        type: 'full_access_checkpoint',
+      })]);
+    });
+
     it('uses provided sessionId', () => {
       const addr = uniqueAddr();
       const { result } = renderHook(() =>

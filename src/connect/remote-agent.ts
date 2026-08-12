@@ -488,28 +488,55 @@ export class RemoteAgent {
 
   /** @deprecated Use setSessionMode for acknowledged server policy changes. */
   setMode(mode: ApprovalMode, options?: { turns?: number }): void {
+    const turns = options?.turns ?? 100;
+    if (
+      mode === 'full_access'
+      && (!Number.isInteger(turns) || turns <= 0)
+    ) {
+      throw new Error('Full access turns must be a positive integer');
+    }
     if (!this._currentSession) {
       this._currentSession = { mode };
     } else {
       this._currentSession.mode = mode;
     }
     if (mode === 'full_access') {
-      this._currentSession.full_access_turns = options?.turns || 100;
+      this._currentSession.full_access_turns = turns;
       this._currentSession.full_access_turns_used = 0;
+    } else {
+      delete this._currentSession.full_access_turns;
+      delete this._currentSession.full_access_turns_used;
     }
     if (this._ws) {
       const msg: Record<string, unknown> = { type: 'mode_change', mode };
-      if (mode === 'full_access' && options?.turns) msg.turns = options.turns;
+      if (mode === 'full_access') msg.turns = turns;
       this._ws.send(JSON.stringify(msg));
     }
   }
 
   private _applyServerMode(mode: ServerApprovalMode): boolean {
-    if (this._currentSession?.mode === mode) return false;
+    if (this._currentSession?.mode === mode) {
+      if (
+        mode !== 'full_access'
+        && (
+          this._currentSession.full_access_turns !== undefined
+          || this._currentSession.full_access_turns_used !== undefined
+        )
+      ) {
+        delete this._currentSession.full_access_turns;
+        delete this._currentSession.full_access_turns_used;
+        return true;
+      }
+      return false;
+    }
     if (!this._currentSession) {
       this._currentSession = { mode };
     } else {
       this._currentSession.mode = mode;
+      if (mode !== 'full_access') {
+        delete this._currentSession.full_access_turns;
+        delete this._currentSession.full_access_turns_used;
+      }
     }
     return true;
   }

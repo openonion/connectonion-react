@@ -104,6 +104,36 @@ describe('RemoteAgent authoritative mode state', () => {
     });
   });
 
+  it('clears stale Full access counters when authority returns to Default', () => {
+    const remote = agent();
+    remote._currentSession = {
+      ...remote._currentSession,
+      mode: 'full_access',
+      full_access_turns: 10,
+      full_access_turns_used: 4,
+    };
+
+    deliver(remote, modeFrame('default'));
+
+    expect(remote.currentSession).toMatchObject({ mode: 'default' });
+    expect(remote.currentSession?.full_access_turns).toBeUndefined();
+    expect(remote.currentSession?.full_access_turns_used).toBeUndefined();
+  });
+
+  it('cleans stale counters even when the authoritative mode is unchanged', () => {
+    const remote = agent();
+    remote._currentSession = {
+      ...remote._currentSession,
+      full_access_turns: 10,
+      full_access_turns_used: 4,
+    };
+
+    deliver(remote, modeFrame('default'));
+
+    expect(remote.currentSession?.full_access_turns).toBeUndefined();
+    expect(remote.currentSession?.full_access_turns_used).toBeUndefined();
+  });
+
   it('ignores a valid update owned by another session', () => {
     const remote = agent();
 

@@ -231,7 +231,8 @@ function createAgentStore(address: string, sessionId: string) {
       }),
       {
         name: `co:agent:${address}:session:${sessionId}`,
-        version: 1,
+        // v2 runs the approval-vocabulary migration for existing v1 stores.
+        version: 2,
         migrate: (persistedState: unknown) => {
           if (!persistedState || typeof persistedState !== 'object') {
             return persistedState as AgentState;

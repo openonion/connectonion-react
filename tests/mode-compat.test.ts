@@ -10,7 +10,27 @@ describe('previous approval vocabulary compatibility', () => {
     ['accept_edits', 'auto_approve'],
     ['ulw', 'full_access'],
   ])('normalizes session mode %s to %s', (previous, canonical) => {
-    expect(normalizeSessionState({ mode: previous })).toEqual({ mode: canonical });
+    const state = previous === 'ulw'
+      ? { mode: previous, ulw_turns: 20, ulw_turns_used: 4 }
+      : { mode: previous };
+    expect(normalizeSessionState(state)?.mode).toBe(canonical);
+  });
+
+  test.each([
+    { mode: 'future', full_access_turns: 20, full_access_turns_used: 4 },
+    { mode: 'full_access', full_access_turns: 0, full_access_turns_used: 0 },
+    { mode: 'full_access', full_access_turns: 20, full_access_turns_used: 20 },
+    { mode: 'full_access', full_access_turns: 20.5, full_access_turns_used: 4 },
+  ])('fails malformed presentation state closed to Default', (state) => {
+    expect(normalizeSessionState(state)).toEqual({ mode: 'default' });
+  });
+
+  test('removes stale Full access counters outside Full access', () => {
+    expect(normalizeSessionState({
+      mode: 'default',
+      full_access_turns: 20,
+      full_access_turns_used: 4,
+    })).toEqual({ mode: 'default' });
   });
 
   test('moves previous Full access fields and drops their old keys', () => {
@@ -57,6 +77,18 @@ describe('previous approval vocabulary compatibility', () => {
         turns_used: 10,
         max_turns: 10,
       });
+    },
+  );
+
+  test.each(['full_access_checkpoint', 'ulw_turns_reached'])(
+    'drops malformed persisted %s cards',
+    (type) => {
+      expect(normalizeChatItems([{
+        id: 'bad-checkpoint',
+        type,
+        turns_used: -1,
+        max_turns: 0,
+      }])).toEqual([]);
     },
   );
 });
