@@ -626,6 +626,38 @@ describe('useAgentForHuman hook', () => {
 
       expect(result.current.status).toBe('idle');
     });
+
+    it('consumes reconnect rejection and exposes it through error state', async () => {
+      class ReconnectErrorWS extends MockWebSocket {
+        override send(data: unknown): void {
+          const msg = JSON.parse(String(data));
+          if (msg.type === 'PONG') return;
+          if (msg.type === 'CONNECT') {
+            setTimeout(() => this.onmessage?.({
+              data: JSON.stringify({
+                type: 'ERROR',
+                error: 'Reconnect refused',
+              }),
+            }), 0);
+          }
+        }
+      }
+      ActiveWS = ReconnectErrorWS;
+      const addr = uniqueAddr();
+      const { result } = renderHook(() =>
+        useAgentForHuman(addr, 'reconnect-error-session')
+      );
+
+      await act(async () => {
+        result.current.reconnect();
+        await flush();
+      });
+
+      expect(result.current.connectionState).toBe('disconnected');
+      expect(result.current.error?.message).toBe(
+        'Agent error: Reconnect refused',
+      );
+    });
   });
 
   describe('sanitizeForPersistence', () => {

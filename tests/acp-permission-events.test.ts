@@ -49,6 +49,7 @@ function harness() {
   const agent = new RemoteAgent(`0x${'a'.repeat(64)}`, {}) as any;
   const socket = new FakeSocket();
   agent._ws = socket;
+  agent._authenticated = true;
   agent._currentSession = { session_id: SESSION_ID };
   const deliver = (frame: object) => {
     agent._handleMessage({ data: JSON.stringify(frame) });

@@ -92,7 +92,13 @@ interface PendingPermissionProfileChange {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface ReconnectReadyWaiter {
+  resolve: () => void;
+  reject: (error: Error) => void;
+}
+
 const PERMISSION_PROFILE_CHANGE_TIMEOUT_MS = 30000;
+const WEBSOCKET_OPEN = 1;
 
 function approvalRejectMode(value: unknown): ApprovalRejectMode {
   return value === 'reject_soft' || value === 'reject_explain'
@@ -160,6 +166,8 @@ export class RemoteAgent {
   // promise and leaking the first socket and its ping monitor. Cleared when the
   // attempt settles so a failed connect can be retried.
   private _connecting: Promise<void> | null = null;
+  private _reconnecting: Promise<Response> | null = null;
+  private _reconnectReadyWaiters: ReconnectReadyWaiter[] = [];
   private _pendingApproval: PendingApproval | null = null;
   private _pendingPermissionProfileChange: PendingPermissionProfileChange | null = null;
 
@@ -265,7 +273,16 @@ export class RemoteAgent {
     if (options?.files?.length) msg.files = options.files.map(f => ({ name: f.name, data: f.dataUrl }));
     if (!isDirect) msg.to = this.address;
 
-    this._ws!.send(JSON.stringify(msg));
+    try {
+      this._sendAuthenticated(msg);
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      this._error = error;
+      this._clearPlaceholder();
+      this._status = 'idle';
+      this._onMessage?.();
+      throw error;
+    }
 
     if (isInterjection) {
       return new Promise<Response>((resolve, reject) => {
@@ -285,16 +302,50 @@ export class RemoteAgent {
     });
   }
 
-  async reconnect(sessionId?: string): Promise<Response> {
+  reconnect(sessionId?: string): Promise<Response> {
     const sid = sessionId || this._currentSession?.session_id;
-    if (!sid) throw new Error('No session to reconnect');
+    if (!sid) return Promise.reject(new Error('No session to reconnect'));
+    if (this._hasReadyConnection()) {
+      return Promise.resolve({ text: '', done: true });
+    }
+    // connect() and reconnect() are two entry points to the same one-session
+    // transport. A hydration callback can race the page's eager connect; let the
+    // authenticated handshake finish instead of replacing its socket mid-flight.
+    if (this._connecting) {
+      return this._connecting.then(() => ({ text: '', done: true }));
+    }
+    if (this._reconnecting) return this._reconnecting;
+
+    const attempt = this._doReconnect(sid);
+    let tracked: Promise<Response>;
+    tracked = attempt.catch((cause) => {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      if (this._reconnecting === tracked) {
+        this._error = error;
+        this._status = 'idle';
+        this._connectionState = 'disconnected';
+        this._settleReconnectReady(error);
+        this._onMessage?.();
+      }
+      throw error;
+    });
+    this._reconnecting = tracked;
+    const clear = () => {
+      if (this._reconnecting === tracked) this._reconnecting = null;
+    };
+    tracked.then(clear, clear);
+    return tracked;
+  }
+
+  private async _doReconnect(sid: string): Promise<Response> {
+    // A live authenticated socket already receives this session's pending output.
+    // Only a genuinely unavailable transport reaches this replacement path.
+    this._closeWs();
 
     if (!this._currentSession) this._currentSession = { session_id: sid };
     this._status = 'working';
+    this._connectionState = 'reconnecting';
     this._onMessage?.();
-
-    // Force new connection for reconnect
-    this._closeWs();
 
     this._keys = ensureKeys(this._keys);
     await this._resolveEndpointOnce();
@@ -302,8 +353,6 @@ export class RemoteAgent {
     const { wsUrl, isDirect } = this._resolveWsUrl();
     const ws = new this._WS(wsUrl);
     this._ws = ws;
-    this._connectionState = 'reconnecting';
-    this._onMessage?.();
 
     return new Promise<Response>((resolve, reject) => {
       this._inputResolve = resolve;
@@ -317,7 +366,6 @@ export class RemoteAgent {
       }, 60000);
 
       ws.onopen = () => {
-        this._connectionState = 'connected';
         this._lastActivityTime = Date.now();
         this._startPingMonitor();
 
@@ -351,8 +399,11 @@ export class RemoteAgent {
       );
       return;
     }
-    if (!this._ws) throw new Error('No active connection');
-    this._ws.send(JSON.stringify(message));
+    if (message.type === 'ONBOARD_SUBMIT') {
+      this._sendOpen(message);
+    } else {
+      this._sendAuthenticated(message);
+    }
     if (message.type === 'ASK_USER_RESPONSE') {
       for (let i = this._chatItems.length - 1; i >= 0; i--) {
         const item = this._chatItems[i];
@@ -383,7 +434,6 @@ export class RemoteAgent {
   ): void {
     const pending = this._pendingApproval;
     if (!pending || pending.answered) return;
-    if (!this._ws) throw new Error('No active connection');
     const rejectionMode = approvalRejectMode(mode);
     const response = pending.acp
       ? acpPermissionResponseFrame(
@@ -401,11 +451,6 @@ export class RemoteAgent {
 
   interrupt(): void {
     if (this._interruptSent) return;
-    if (!this._ws || !this._authenticated) {
-      throw new Error('No active connection');
-    }
-    this._interruptSent = true;
-
     const pending = this._pendingApproval;
     if (pending && !pending.answered) {
       const response = pending.acp
@@ -417,6 +462,7 @@ export class RemoteAgent {
           mode: 'reject_hard',
         };
       this._sendPendingApproval(pending, response);
+      this._interruptSent = true;
       return;
     }
 
@@ -424,20 +470,21 @@ export class RemoteAgent {
     const message = this._supportsACPCancel && sessionId
       ? acpCancelFrame(sessionId)
       : { type: 'INTERRUPT' };
-    this._ws.send(JSON.stringify(message));
+    this._sendAuthenticated(message);
+    this._interruptSent = true;
   }
 
   private _sendPendingApproval(
     pending: PendingApproval,
     response: Record<string, unknown>,
   ): void {
+    this._sendAuthenticated(response);
     pending.answered = true;
     const item = this._chatItems.find(
       (candidate) => candidate.id === pending.chatItemId
         && candidate.type === 'approval_needed',
     );
     if (item?.type === 'approval_needed') item.answered = true;
-    this._ws!.send(JSON.stringify(response));
     this._status = 'working';
     this._onMessage?.();
   }
@@ -487,7 +534,7 @@ export class RemoteAgent {
         };
         this._onMessage?.();
         try {
-          this._ws!.send(JSON.stringify(request));
+          this._sendAuthenticated(request);
         } catch (cause) {
           const error = cause instanceof Error ? cause : new Error(String(cause));
           const pending = this._pendingPermissionProfileChange;
@@ -641,6 +688,9 @@ export class RemoteAgent {
   }
 
   reset(): void {
+    const reject = this._inputReject;
+    this._reconnecting = null;
+    this._settleReconnectReady(new Error('Connection reset'));
     this._closeWs();
     this._currentSession = null;
     this._chatItems = [];
@@ -649,6 +699,7 @@ export class RemoteAgent {
     this._error = null;
     this._pendingApproval = null;
     this._settleInput();
+    reject?.(new Error('Connection reset'));
     this._settleSessionStatusWaiters('not_found');
   }
 
@@ -663,7 +714,7 @@ export class RemoteAgent {
 
   async checkSessionStatus(sessionId: string): Promise<RemoteSessionStatus> {
     // If we have a live WS, send SESSION_STATUS over it (no new connection needed)
-    if (this._ws && this._authenticated) {
+    if (this._authenticated && this._isSocketOpen(this._ws)) {
       return new Promise((resolve) => {
         const existing = this._sessionStatusWaiters.get(sessionId);
         if (existing) {
@@ -781,7 +832,8 @@ export class RemoteAgent {
   // --- Private: connection lifecycle ---
 
   private _ensureConnected(): Promise<void> {
-    if (this._ws && this._authenticated) return Promise.resolve();
+    if (this._hasReadyConnection()) return Promise.resolve();
+    if (this._reconnecting) return this._waitForReconnectReady();
     if (this._connecting) return this._connecting;
 
     const attempt = this._doConnect();
@@ -796,7 +848,7 @@ export class RemoteAgent {
   private async _doConnect(): Promise<void> {
     // A socket left over from a failed attempt is dead weight: _authenticated is
     // false, so nothing can use it, and overwriting _ws below would leak it.
-    if (this._ws && !this._authenticated) this._closeWs();
+    if (this._ws && !this._hasReadyConnection()) this._closeWs();
 
     this._keys = ensureKeys(this._keys);
     await this._resolveEndpointOnce();
@@ -921,8 +973,15 @@ export class RemoteAgent {
         this._applyServerMode(this._permissionProfileState.currentModeId);
       }
       this._authenticated = true;
-      // If status is "connected" (idle), resolve immediately — session is alive, no events to wait for
-      if ((data.status as string) === 'connected' || (data.status as string) === 'new') {
+      this._connectionState = 'connected';
+      this._settleReconnectReady();
+      // An idle/new session has no output left to wait for. Hosts in the rollout
+      // have used both "connected" and "idle" for that same state.
+      if (
+        (data.status as string) === 'connected'
+        || (data.status as string) === 'idle'
+        || (data.status as string) === 'new'
+      ) {
         this._status = 'idle';
         const resolve = this._inputResolve;
         this._settleInput();
@@ -1259,8 +1318,15 @@ export class RemoteAgent {
   }
 
   private _handleConnectionLoss(): void {
+    const connectionError = new Error('Connection closed before response');
+    // Make recovery callable before subscribers render the disconnected UI.
+    // Promise rejection handlers clear this on a later microtask, which is too
+    // late for an immediate online/visibility event or reconnect click.
+    this._reconnecting = null;
+    this._settleReconnectReady(connectionError);
     this._ws = null;
     this._authenticated = false;
+    this._connectionState = 'disconnected';
     this._supportsACPCancel = false;
     this._permissionProfileState = null;
     this._stopPingMonitor();
@@ -1276,17 +1342,62 @@ export class RemoteAgent {
     // Reject pending connect
     if (this._connectReject) {
       this._settleConnect(new Error('Connection lost during authentication'));
+      this._onMessage?.();
       return;
     }
 
     // Reject pending input only if there is one
     if (this._inputReject) {
       this._status = 'idle';
-      this._connectionState = 'disconnected';
+      this._error = connectionError;
       const reject = this._inputReject;
       this._settleInput();
-      reject(new Error('Connection closed before response'));
+      reject(connectionError);
+    }
+    this._onMessage?.();
+  }
+
+  private _isSocketOpen(ws: WebSocketLike | null): boolean {
+    return !!ws && (ws.readyState === undefined || ws.readyState === WEBSOCKET_OPEN);
+  }
+
+  private _hasReadyConnection(): boolean {
+    return this._authenticated
+      && this._isSocketOpen(this._ws);
+  }
+
+  private _sendAuthenticated(message: Record<string, unknown>): void {
+    if (!this._authenticated) {
+      const error = new Error('Agent connection is not ready');
+      this._error = error;
       this._onMessage?.();
+      throw error;
+    }
+    this._sendOpen(message);
+  }
+
+  private _sendOpen(message: Record<string, unknown>): void {
+    if (!this._isSocketOpen(this._ws)) {
+      const error = new Error('Agent connection is not ready');
+      this._error = error;
+      this._onMessage?.();
+      throw error;
+    }
+    this._ws!.send(JSON.stringify(message));
+  }
+
+  private _waitForReconnectReady(): Promise<void> {
+    if (this._hasReadyConnection()) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      this._reconnectReadyWaiters.push({ resolve, reject });
+    });
+  }
+
+  private _settleReconnectReady(error?: Error): void {
+    const waiters = this._reconnectReadyWaiters.splice(0);
+    for (const waiter of waiters) {
+      if (error) waiter.reject(error);
+      else waiter.resolve();
     }
   }
 
