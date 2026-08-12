@@ -58,6 +58,7 @@ jobs:
           npm init -y >/dev/null
           npm install react react-dom "$GITHUB_WORKSPACE/$TARBALL"
           node -e "require('@connectonion/react')"
+          node --input-type=module -e "await import('@connectonion/react/experimental/native-acp')"
 
       - name: Publish to npm
         run: npm publish --provenance --access public

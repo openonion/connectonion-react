@@ -21,6 +21,10 @@
       "types": "./dist/transcribe.d.ts",
       "default": "./dist/transcribe.js"
     },
+    "./experimental/native-acp": {
+      "types": "./dist/experimental/native-acp.d.mts",
+      "import": "./dist/experimental/native-acp.mjs"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -29,9 +33,12 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "npm run build:compile && npm run verify:native-acp",
+    "build:compile": "tsc && tsc -p tsconfig.experimental.json",
+    "pretest": "npm run build:compile",
     "test": "jest",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.experimental.json --noEmit",
+    "verify:native-acp": "node scripts/verify-native-acp.mjs",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
