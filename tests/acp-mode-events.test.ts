@@ -34,7 +34,7 @@ function deliver(agent: RemoteAgent, frame: Record<string, unknown>): void {
 }
 
 describe('ACP current_mode_update decoding', () => {
-  it.each(['safe', 'accept_edits', 'ulw'] as const)(
+  it.each([':read-only', ':workspace', ':danger-full-access'] as const)(
     'accepts the persisted server mode %s',
     (mode) => {
       expect(decodeACPModeUpdate(modeFrame(mode))).toEqual({
@@ -45,15 +45,26 @@ describe('ACP current_mode_update decoding', () => {
   );
 
   it.each([
+    ['safe', ':read-only'],
+    ['accept_edits', ':workspace'],
+    ['ulw', ':danger-full-access'],
+  ] as const)('normalizes the previous mode %s to %s', (previous, canonical) => {
+    expect(decodeACPModeUpdate(modeFrame(previous))).toEqual({
+      sessionId: SESSION_ID,
+      mode: canonical,
+    });
+  });
+
+  it.each([
     ['legacy plan alias', modeFrame('plan')],
     ['unknown mode', modeFrame('future')],
     ['empty mode', modeFrame('')],
-    ['missing session', modeFrame('safe', '')],
+    ['missing session', modeFrame(':read-only', '')],
     ['null frame', null],
     ['array frame', []],
-    ['wrong schema', { ...modeFrame('safe'), acpSchema: 'schema-v1.20.0' }],
+    ['wrong schema', { ...modeFrame(':read-only'), acpSchema: 'schema-v1.20.0' }],
     ['wrong method', {
-      ...modeFrame('safe'),
+      ...modeFrame(':read-only'),
       message: { jsonrpc: '2.0', method: 'session/mode', params: {} },
     }],
   ])('rejects %s', (_name, frame) => {
@@ -61,19 +72,20 @@ describe('ACP current_mode_update decoding', () => {
   });
 
   it('uses the same known-mode predicate for legacy frames', () => {
-    expect(parseServerApprovalMode('safe')).toBe('safe');
+    expect(parseServerApprovalMode(':read-only')).toBe(':read-only');
+    expect(parseServerApprovalMode('safe')).toBe(':read-only');
     expect(parseServerApprovalMode('plan')).toBeNull();
     expect(parseServerApprovalMode('future')).toBeNull();
-    expect(parseServerApprovalMode({ mode: 'ulw' })).toBeNull();
+    expect(parseServerApprovalMode({ mode: ':danger-full-access' })).toBeNull();
   });
 });
 
-describe('RemoteAgent authoritative mode state', () => {
+describe('RemoteAgent authoritative permission profile state', () => {
   function agent(): RemoteAgent {
     const remote = new RemoteAgent('0xmode');
     remote._currentSession = {
       session_id: SESSION_ID,
-      mode: 'safe',
+      mode: ':read-only',
       turn: 7,
     };
     return remote;
@@ -82,22 +94,52 @@ describe('RemoteAgent authoritative mode state', () => {
   it('updates the public mode while preserving the session snapshot', () => {
     const remote = agent();
 
-    deliver(remote, modeFrame('accept_edits'));
+    deliver(remote, modeFrame(':workspace'));
 
-    expect(remote.mode).toBe('accept_edits');
+    expect(remote.permissionProfile).toBe(':workspace');
     expect(remote.currentSession).toMatchObject({
       session_id: SESSION_ID,
-      mode: 'accept_edits',
+      mode: ':workspace',
       turn: 7,
     });
+  });
+
+  it('clears stale Full access counters when authority returns to Read only', () => {
+    const remote = agent();
+    remote._currentSession = {
+      ...remote._currentSession,
+      mode: ':danger-full-access',
+      full_access_turns: 10,
+      full_access_turns_used: 4,
+    };
+
+    deliver(remote, modeFrame(':read-only'));
+
+    expect(remote.currentSession).toMatchObject({ mode: ':read-only' });
+    expect(remote.currentSession?.full_access_turns).toBeUndefined();
+    expect(remote.currentSession?.full_access_turns_used).toBeUndefined();
+  });
+
+  it('cleans stale counters even when the authoritative mode is unchanged', () => {
+    const remote = agent();
+    remote._currentSession = {
+      ...remote._currentSession,
+      full_access_turns: 10,
+      full_access_turns_used: 4,
+    };
+
+    deliver(remote, modeFrame(':read-only'));
+
+    expect(remote.currentSession?.full_access_turns).toBeUndefined();
+    expect(remote.currentSession?.full_access_turns_used).toBeUndefined();
   });
 
   it('ignores a valid update owned by another session', () => {
     const remote = agent();
 
-    deliver(remote, modeFrame('ulw', 'another-session'));
+    deliver(remote, modeFrame(':danger-full-access', 'another-session'));
 
-    expect(remote.mode).toBe('safe');
+    expect(remote.permissionProfile).toBe(':read-only');
   });
 
   it('deduplicates the ACP and legacy representations', () => {
@@ -105,19 +147,19 @@ describe('RemoteAgent authoritative mode state', () => {
     const onMessage = jest.fn();
     remote.onMessage = onMessage;
 
-    deliver(remote, modeFrame('ulw'));
-    deliver(remote, { type: 'mode_changed', mode: 'ulw' });
+    deliver(remote, modeFrame(':danger-full-access'));
+    deliver(remote, { type: 'mode_changed', mode: ':danger-full-access' });
 
-    expect(remote.mode).toBe('ulw');
+    expect(remote.permissionProfile).toBe(':danger-full-access');
     expect(onMessage).toHaveBeenCalledTimes(1);
   });
 
   it('still accepts a valid legacy-only Host update', () => {
     const remote = agent();
 
-    deliver(remote, { type: 'mode_changed', mode: 'accept_edits' });
+    deliver(remote, { type: 'mode_changed', mode: ':workspace' });
 
-    expect(remote.mode).toBe('accept_edits');
+    expect(remote.permissionProfile).toBe(':workspace');
   });
 
   it.each(['plan', 'future', '', null])(
@@ -127,7 +169,7 @@ describe('RemoteAgent authoritative mode state', () => {
 
       deliver(remote, { type: 'mode_changed', mode });
 
-      expect(remote.mode).toBe('safe');
+      expect(remote.permissionProfile).toBe(':read-only');
     },
   );
 });

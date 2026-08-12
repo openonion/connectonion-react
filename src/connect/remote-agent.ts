@@ -40,14 +40,22 @@
  */
 import * as address from '../address';
 import {
-  AgentInfo, AgentStatus, ApprovalMode, ChatItem, ChatItemType, ConnectionState,
-  ConnectOptions, PlanEntry, RemoteSessionStatus, ResolvedEndpoint, Response, SessionState, WebSocketCtor, WebSocketLike,
+  AgentInfo, AgentStatus, ApprovalMode, ChatItem, ChatItemType, CollaborationMode, ConnectionState,
+  ConnectOptions, PermissionProfile, PlanEntry, RemoteSessionStatus, ResolvedEndpoint, Response, SessionState, WebSocketCtor, WebSocketLike,
 } from './types';
 import {
   AgentInfoSource, getWebSocketCtor, generateUUID, normalizeRelayUrl, resolveEndpoint, toAgentInfo,
 } from './endpoint';
 import { ensureKeys, signPayload } from './auth';
 import { mapEventToChatItem } from './chat-item-mapper';
+import {
+  isCanonicalPermissionProfile,
+  normalizeCollaborationMode,
+  normalizePermissionProfile,
+  normalizeChatItems,
+  normalizeFullAccessCheckpointFrame,
+  normalizeSessionState,
+} from './mode-compat';
 import {
   ACPPermissionRequest,
   ACPSetModeResponse,
@@ -66,8 +74,7 @@ import {
   hostSessionModeState,
   hostSupportsACPCancel,
   normalizePlanEntries,
-  parseServerApprovalMode,
-  ServerApprovalMode,
+  parsePermissionProfile,
 } from './wire-events';
 
 interface PendingApproval {
@@ -76,16 +83,16 @@ interface PendingApproval {
   acp?: ACPPermissionRequest;
 }
 
-interface PendingModeChange {
+interface PendingPermissionProfileChange {
   requestId: string;
   sessionId: string;
-  mode: ServerApprovalMode;
+  profile: PermissionProfile;
   resolve: () => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 }
 
-const MODE_CHANGE_TIMEOUT_MS = 30000;
+const PERMISSION_PROFILE_CHANGE_TIMEOUT_MS = 30000;
 
 function approvalRejectMode(value: unknown): ApprovalRejectMode {
   return value === 'reject_soft' || value === 'reject_explain'
@@ -125,7 +132,7 @@ export class RemoteAgent {
   private _ws: WebSocketLike | null = null;
   private _authenticated = false;
   private _supportsACPCancel = false;
-  private _sessionModes: HostSessionModeState | null = null;
+  private _permissionProfileState: HostSessionModeState | null = null;
   private _interruptSent = false;
 
   // Promise resolution for current input() call
@@ -154,7 +161,7 @@ export class RemoteAgent {
   // attempt settles so a failed connect can be retried.
   private _connecting: Promise<void> | null = null;
   private _pendingApproval: PendingApproval | null = null;
-  private _pendingModeChange: PendingModeChange | null = null;
+  private _pendingPermissionProfileChange: PendingPermissionProfileChange | null = null;
 
   _onMessage: (() => void) | null = null;
   set onMessage(fn: (() => void) | null) { this._onMessage = fn; }
@@ -174,14 +181,30 @@ export class RemoteAgent {
   get connectionState(): ConnectionState { return this._connectionState; }
   get currentSession(): SessionState | null { return this._currentSession; }
   get ui(): ChatItem[] { return this._chatItems; }
-  get mode(): ApprovalMode { return this._currentSession?.mode || 'safe'; }
+  get permissionProfile(): PermissionProfile {
+    return this._currentSession?.mode || ':read-only';
+  }
+  get collaborationMode(): CollaborationMode {
+    return this._currentSession?.collaboration_mode || 'default';
+  }
+  /** @deprecated Read collaborationMode and permissionProfile separately. */
+  get mode(): ApprovalMode {
+    return this.collaborationMode === 'plan' ? 'plan' : this.permissionProfile;
+  }
   get plan(): ReadonlyArray<PlanEntry> {
     return this._currentSession?.plan?.map((entry) => ({ ...entry })) ?? [];
   }
   get availableModes(): ReadonlyArray<HostSessionModeState['availableModes'][number]> {
-    return this._sessionModes?.availableModes.map((mode) => ({ ...mode })) ?? [];
+    return this.availablePermissionProfiles;
   }
-  get modeChangePending(): boolean { return this._pendingModeChange !== null; }
+  get availablePermissionProfiles(): ReadonlyArray<HostSessionModeState['availableModes'][number]> {
+    return this._permissionProfileState?.availableModes.map((mode) => ({ ...mode })) ?? [];
+  }
+  get permissionProfileChangePending(): boolean {
+    return this._pendingPermissionProfileChange !== null;
+  }
+  /** @deprecated Use permissionProfileChangePending. */
+  get modeChangePending(): boolean { return this.permissionProfileChangePending; }
   get error(): Error | null { return this._error || null; }
   get dashboardHtml(): string | null { return this._dashboardHtml; }
   get profile(): AgentInfo | null { return this._profile; }
@@ -344,7 +367,7 @@ export class RemoteAgent {
     } else if (
       message.type === 'APPROVAL_RESPONSE' ||
       message.type === 'PLAN_REVIEW_RESPONSE' ||
-      message.type === 'ULW_RESPONSE' ||
+      message.type === 'FULL_ACCESS_RESPONSE' ||
       message.type === 'ONBOARD_SUBMIT'
     ) {
       this._status = 'working';
@@ -419,14 +442,14 @@ export class RemoteAgent {
     this._onMessage?.();
   }
 
-  /** Change durable Host policy only after one owned ACP acknowledgement. */
-  async setSessionMode(mode: ServerApprovalMode): Promise<void> {
+  /** Change durable Host permissions only after one owned acknowledgement. */
+  async setPermissionProfile(profile: PermissionProfile): Promise<void> {
     try {
-      if (parseServerApprovalMode(mode) !== mode) {
-        throw new Error(`Unsupported server session mode: ${String(mode)}`);
+      if (!isCanonicalPermissionProfile(profile)) {
+        throw new Error(`Unsupported permission profile: ${String(profile)}`);
       }
-      if (this._pendingModeChange) {
-        throw new Error('A session mode change is already pending');
+      if (this._pendingPermissionProfileChange) {
+        throw new Error('A permission profile change is already pending');
       }
 
       this._error = null;
@@ -435,29 +458,29 @@ export class RemoteAgent {
       if (!sessionId || !this._ws || !this._authenticated) {
         throw new Error('No authenticated session');
       }
-      if (!this._sessionModes) {
-        throw new Error('Host does not support acknowledged ACP session modes');
+      if (!this._permissionProfileState) {
+        throw new Error('Host does not support acknowledged permission profiles');
       }
-      if (!this._sessionModes.availableModes.some((item) => item.id === mode)) {
-        throw new Error(`Session mode is not available: ${mode}`);
+      if (!this._permissionProfileState.availableModes.some((item) => item.id === profile)) {
+        throw new Error(`Permission profile is not available: ${profile}`);
       }
-      if (this._currentSession?.mode === mode) return;
+      if (this._currentSession?.mode === profile) return;
 
       const requestId = generateUUID();
-      const request = acpSetSessionModeFrame(requestId, sessionId, mode);
+      const request = acpSetSessionModeFrame(requestId, sessionId, profile);
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => {
-          const pending = this._pendingModeChange;
+          const pending = this._pendingPermissionProfileChange;
           if (pending?.requestId !== requestId) return;
-          this._rejectModeChange(
+          this._rejectPermissionProfileChange(
             pending,
-            new Error('Session mode change timed out'),
+            new Error('Permission profile change timed out'),
           );
-        }, MODE_CHANGE_TIMEOUT_MS);
-        this._pendingModeChange = {
+        }, PERMISSION_PROFILE_CHANGE_TIMEOUT_MS);
+        this._pendingPermissionProfileChange = {
           requestId,
           sessionId,
-          mode,
+          profile,
           resolve,
           reject,
           timer,
@@ -467,8 +490,8 @@ export class RemoteAgent {
           this._ws!.send(JSON.stringify(request));
         } catch (cause) {
           const error = cause instanceof Error ? cause : new Error(String(cause));
-          const pending = this._pendingModeChange;
-          if (pending) this._rejectModeChange(pending, error);
+          const pending = this._pendingPermissionProfileChange;
+          if (pending) this._rejectPermissionProfileChange(pending, error);
         }
       });
     } catch (cause) {
@@ -481,30 +504,60 @@ export class RemoteAgent {
     }
   }
 
-  /** @deprecated Use setSessionMode for acknowledged server policy changes. */
-  setMode(mode: ApprovalMode, options?: { turns?: number }): void {
-    if (!this._currentSession) {
-      this._currentSession = { mode };
-    } else {
-      this._currentSession.mode = mode;
-    }
-    if (mode === 'ulw') {
-      this._currentSession.ulw_turns = options?.turns || 100;
-      this._currentSession.ulw_turns_used = 0;
-    }
-    if (this._ws) {
-      const msg: Record<string, unknown> = { type: 'mode_change', mode };
-      if (mode === 'ulw' && options?.turns) msg.turns = options.turns;
-      this._ws.send(JSON.stringify(msg));
-    }
+  /** @deprecated Use setPermissionProfile. */
+  async setSessionMode(mode: PermissionProfile): Promise<void> {
+    await this.setPermissionProfile(mode);
   }
 
-  private _applyServerMode(mode: ServerApprovalMode): boolean {
-    if (this._currentSession?.mode === mode) return false;
+  /** Change local collaboration intent without changing Host authority. */
+  setCollaborationMode(mode: CollaborationMode): void {
+    const collaboration = normalizeCollaborationMode(mode);
+    if (!collaboration) {
+      throw new Error(`Unsupported collaboration mode: ${String(mode)}`);
+    }
+    if (!this._currentSession) this._currentSession = {};
+    if (this._currentSession.collaboration_mode === collaboration) return;
+    this._currentSession.collaboration_mode = collaboration;
+    this._onMessage?.();
+  }
+
+  /** @deprecated Use setCollaborationMode or await setPermissionProfile. */
+  setMode(mode: ApprovalMode, _options?: { turns?: number }): void {
+    const collaboration = normalizeCollaborationMode(mode);
+    if (collaboration) {
+      this.setCollaborationMode(collaboration);
+      return;
+    }
+    const profile = normalizePermissionProfile(mode);
+    if (!profile) throw new Error(`Unsupported permission profile: ${String(mode)}`);
+    throw new Error(
+      `Permission profile ${profile} requires await setPermissionProfile()`,
+    );
+  }
+
+  private _applyServerMode(mode: PermissionProfile): boolean {
+    if (this._currentSession?.mode === mode) {
+      if (
+        mode !== ':danger-full-access'
+        && (
+          this._currentSession.full_access_turns !== undefined
+          || this._currentSession.full_access_turns_used !== undefined
+        )
+      ) {
+        delete this._currentSession.full_access_turns;
+        delete this._currentSession.full_access_turns_used;
+        return true;
+      }
+      return false;
+    }
     if (!this._currentSession) {
       this._currentSession = { mode };
     } else {
       this._currentSession.mode = mode;
+      if (mode !== ':danger-full-access') {
+        delete this._currentSession.full_access_turns;
+        delete this._currentSession.full_access_turns_used;
+      }
     }
     return true;
   }
@@ -533,9 +586,10 @@ export class RemoteAgent {
    * plan erase the last valid ACP state during a rolling Host upgrade.
    */
   private _applySessionSnapshot(value: unknown): void {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+    const canonical = normalizeSessionState(value);
+    if (!canonical) return;
     const raw = value as Record<string, unknown>;
-    const snapshot = { ...raw } as SessionState;
+    const snapshot = { ...canonical };
     const sameSession = typeof raw.session_id === 'string'
       && raw.session_id.length > 0
       && raw.session_id === this._currentSession?.session_id;
@@ -552,13 +606,13 @@ export class RemoteAgent {
     this._currentSession = snapshot;
   }
 
-  private _resolveModeChange(
-    pending: PendingModeChange,
+  private _resolvePermissionProfileChange(
+    pending: PendingPermissionProfileChange,
     response: ACPSetModeResponse,
   ): void {
-    if (this._pendingModeChange !== pending) return;
+    if (this._pendingPermissionProfileChange !== pending) return;
     clearTimeout(pending.timer);
-    this._pendingModeChange = null;
+    this._pendingPermissionProfileChange = null;
     if ('error' in response) {
       const error = new Error(response.error.message);
       (error as Error & { code?: number; data?: unknown }).code = response.error.code;
@@ -568,19 +622,19 @@ export class RemoteAgent {
       this._onMessage?.();
       return;
     }
-    this._applyServerMode(pending.mode);
+    this._applyServerMode(pending.profile);
     this._error = null;
     pending.resolve();
     this._onMessage?.();
   }
 
-  private _rejectModeChange(
-    pending: PendingModeChange,
+  private _rejectPermissionProfileChange(
+    pending: PendingPermissionProfileChange,
     error: Error,
   ): void {
-    if (this._pendingModeChange !== pending) return;
+    if (this._pendingPermissionProfileChange !== pending) return;
     clearTimeout(pending.timer);
-    this._pendingModeChange = null;
+    this._pendingPermissionProfileChange = null;
     this._error = error;
     pending.reject(error);
     this._onMessage?.();
@@ -697,7 +751,8 @@ export class RemoteAgent {
   // after the last user message the server knows about. Naive
   // [...userItems, ...serverNonUserItems] reorders into [user, user, agent, agent]
   // when the client added an optimistic user before reconnecting.
-  private _mergeServerChatItems(serverItems: ChatItem[]): void {
+  private _mergeServerChatItems(value: unknown): void {
+    const serverItems = normalizeChatItems(value);
     const serverUserCount = serverItems.filter(i => i.type === 'user').length;
     let seen = 0;
     let cutoff = this._chatItems.length;
@@ -807,8 +862,8 @@ export class RemoteAgent {
     // CONNECTED capability state is authoritative. A server_newer session can
     // still contain the pre-transaction mode, so reapply the advertised value
     // after accepting the durable conversation snapshot.
-    if (this._sessionModes) {
-      this._applyServerMode(this._sessionModes.currentModeId);
+    if (this._permissionProfileState) {
+      this._applyServerMode(this._permissionProfileState.currentModeId);
     }
     if (connected.server_newer && connected.chat_items && Array.isArray(connected.chat_items)) {
       this._mergeServerChatItems(connected.chat_items as ChatItem[]);
@@ -835,9 +890,9 @@ export class RemoteAgent {
     // CONNECTED — resolve ensureConnected() promise
     if (data?.type === 'CONNECTED') {
       this._supportsACPCancel = hostSupportsACPCancel(data);
-      this._sessionModes = hostSessionModeState(data);
-      if (this._sessionModes) {
-        this._applyServerMode(this._sessionModes.currentModeId);
+      this._permissionProfileState = hostSessionModeState(data);
+      if (this._permissionProfileState) {
+        this._applyServerMode(this._permissionProfileState.currentModeId);
       }
       if (this._connectResolve) {
         if (this._connectTimer) { clearTimeout(this._connectTimer); this._connectTimer = null; }
@@ -862,8 +917,8 @@ export class RemoteAgent {
       }
       // Keep the Host's ACP SessionModeState above any stale mode carried by
       // the synchronized legacy session snapshot.
-      if (this._sessionModes) {
-        this._applyServerMode(this._sessionModes.currentModeId);
+      if (this._permissionProfileState) {
+        this._applyServerMode(this._permissionProfileState.currentModeId);
       }
       this._authenticated = true;
       // If status is "connected" (idle), resolve immediately — session is alive, no events to wait for
@@ -896,17 +951,17 @@ export class RemoteAgent {
     }
 
     if (data?.type === 'ACP_RESPONSE') {
-      const pending = this._pendingModeChange;
+      const pending = this._pendingPermissionProfileChange;
       if (!pending || acpResponseRequestId(data) !== pending.requestId) return;
       const response = decodeACPSetModeResponse(data);
       if (!response || response.sessionId !== pending.sessionId) {
-        this._rejectModeChange(
+        this._rejectPermissionProfileChange(
           pending,
           new Error('Malformed or wrong-session ACP mode response'),
         );
         return;
       }
-      this._resolveModeChange(pending, response);
+      this._resolvePermissionProfileChange(pending, response);
       return;
     }
 
@@ -944,21 +999,21 @@ export class RemoteAgent {
     }
 
     if (data?.type === 'mode_changed') {
-      const mode = parseServerApprovalMode(data.mode);
-      if (mode && this._applyServerMode(mode)) this._onMessage?.();
+      const profile = parsePermissionProfile(data.mode);
+      if (profile && this._applyServerMode(profile)) this._onMessage?.();
       return;
     }
 
-    // ULW turns reached
-    if (data?.type === 'ulw_turns_reached') {
+    const fullAccessCheckpoint = normalizeFullAccessCheckpointFrame(data);
+    if (fullAccessCheckpoint) {
       this._status = 'waiting';
       if (this._currentSession) {
-        this._currentSession.ulw_turns_used = data.turns_used;
+        this._currentSession.full_access_turns_used = fullAccessCheckpoint.turnsUsed;
       }
       this._addChatItem({
-        type: 'ulw_turns_reached',
-        turns_used: data.turns_used as number,
-        max_turns: data.max_turns as number,
+        type: 'full_access_checkpoint',
+        turns_used: fullAccessCheckpoint.turnsUsed,
+        max_turns: fullAccessCheckpoint.maxTurns,
       });
     }
 
@@ -1207,14 +1262,14 @@ export class RemoteAgent {
     this._ws = null;
     this._authenticated = false;
     this._supportsACPCancel = false;
-    this._sessionModes = null;
+    this._permissionProfileState = null;
     this._stopPingMonitor();
     this._settleSessionStatusWaiters('not_found');
 
-    if (this._pendingModeChange) {
-      this._rejectModeChange(
-        this._pendingModeChange,
-        new Error('Connection closed before session mode acknowledgement'),
+    if (this._pendingPermissionProfileChange) {
+      this._rejectPermissionProfileChange(
+        this._pendingPermissionProfileChange,
+        new Error('Connection closed before permission profile acknowledgement'),
       );
     }
 
@@ -1247,10 +1302,10 @@ export class RemoteAgent {
     // socket's onclose is detached below, so nothing else would ever settle it, and
     // _ensureConnected would keep handing the stale promise to every later caller.
     this._settleConnect(new Error('Connection closed during authentication'));
-    if (this._pendingModeChange) {
-      this._rejectModeChange(
-        this._pendingModeChange,
-        new Error('Connection closed before session mode acknowledgement'),
+    if (this._pendingPermissionProfileChange) {
+      this._rejectPermissionProfileChange(
+        this._pendingPermissionProfileChange,
+        new Error('Connection closed before permission profile acknowledgement'),
       );
     }
     if (this._ws) {
@@ -1263,7 +1318,7 @@ export class RemoteAgent {
     }
     this._authenticated = false;
     this._supportsACPCancel = false;
-    this._sessionModes = null;
+    this._permissionProfileState = null;
     this._connectionState = 'disconnected';
     this._settleSessionStatusWaiters('not_found');
   }

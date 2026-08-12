@@ -121,31 +121,43 @@ modes. An optional fourth argument carries explanatory feedback on a rejection.
 Calling the method twice for the same card sends only one response, including
 after a reconnect replay.
 
-### Host session modes
+### Collaboration modes and Host permission profiles
 
-Policy is an authenticated Host capability, not component state. The hook exposes the
-Host's exact advertised choices and an acknowledged setter:
+Codex collaboration intent is component/session workflow state. Permission is
+an authenticated Host capability. The hook exposes both axes separately:
 
 ```tsx
 const {
-  mode,               // 'safe' | 'accept_edits' | 'ulw'
-  availableModes,     // Host-advertised SessionMode[]
-  modeChangePending,
-  setSessionMode,
+  collaborationMode,             // 'default' | 'plan'
+  permissionProfile,              // ':read-only' | ':workspace' | ':danger-full-access'
+  availablePermissionProfiles,    // Host-advertised SessionMode[]
+  permissionProfileChangePending,
+  setCollaborationMode,
+  setPermissionProfile,
 } = useAgentForHuman(address, sessionId)
 
-async function choose(modeId: 'safe' | 'accept_edits' | 'ulw') {
-  await setSessionMode(modeId)
+function planFirst() {
+  setCollaborationMode('plan')
+}
+
+async function allowWorkspaceEdits() {
+  await setPermissionProfile(':workspace')
 }
 ```
 
-Do not render a mode that is absent from `availableModes`. Disable policy controls and
-new prompt submission while `modeChangePending` is true. The promise resolves only for a
-matching Host acknowledgement; a rejection, malformed response, timeout, or disconnect
-leaves `mode` unchanged. Reconnect before retrying an unknown timeout/disconnect outcome.
+The deprecated synchronous `setMode()` accepts only the local `default` and
+`plan` collaboration values. It rejects permission profiles because only an
+acknowledged `setPermissionProfile()` transaction may change Host authority.
 
-Plan is product workflow state over an acknowledged `safe` policy. It is deliberately
-excluded from `ServerApprovalMode` and must never be sent as `session/set_mode`.
+Do not render a profile absent from `availablePermissionProfiles`. Disable
+permission controls and new prompt submission while
+`permissionProfileChangePending` is true. The promise resolves only for a
+matching Host acknowledgement; a rejection, malformed response, timeout, or disconnect
+leaves `permissionProfile` unchanged. Reconnect before retrying an unknown
+timeout/disconnect outcome.
+
+Plan is deliberately excluded from `PermissionProfile` and must never be sent
+as Host `session/set_mode` authority.
 
 ### Current plan
 

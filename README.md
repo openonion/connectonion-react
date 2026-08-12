@@ -37,38 +37,46 @@ function Chat({ address, sessionId }: { address: string; sessionId: string }) {
 
 | | |
 |---|---|
-| `useAgentForHuman(address, sessionId)` | the live WebSocket conversation — `ui`, read-only `plan`, `input`, `respondToApproval`, acknowledged `setSessionMode`, legacy `setMode`, `availableModes`, `modeChangePending`, `reconnect`, `reset`, `profile`, `status`, `error` |
+| `useAgentForHuman(address, sessionId)` | the live WebSocket conversation — `ui`, `plan`, `collaborationMode`, `permissionProfile`, `setCollaborationMode`, acknowledged `setPermissionProfile`, `availablePermissionProfiles`, `permissionProfileChangePending`, `input`, `reconnect`, `reset`, `profile`, `status`, `error` |
 | `useVoiceInput(options?)` | microphone capture → transcription |
 | `isChatItemType` / `isEventType` | type guards that narrow a `ChatItem` by its `type` |
 | `fetchAgentInfo(address)` | one-shot public agent info |
 | `connect(address, options?)` from `@connectonion/react/connect` | low-level connection API |
 | `generateBrowser` / `saveBrowser` / `loadBrowser` / `signBrowser` / `createSignedPayloadBrowser` | Ed25519 browser identity |
-| types | `ChatItem`, `AgentInfo`, `SkillInfo`, `ApprovalMode`, `Message`, `Response`, … |
+| types | `ChatItem`, `AgentInfo`, `SkillInfo`, `CollaborationMode`, `PermissionProfile`, `Message`, `Response`, … |
 
-## Session modes
+## Codex-style collaboration and permissions
 
-The authenticated Host advertises the complete policy set. Render only
-`availableModes`, keep controls disabled while `modeChangePending` is true, and await
-`setSessionMode` before presenting the new policy:
+Collaboration intent and Host permission authority are independent. Default
+and Plan are local collaboration modes; Read only, Auto, and Full access are
+authenticated Host permission profiles:
 
 ```tsx
 const {
-  mode,
-  availableModes,
-  modeChangePending,
-  setSessionMode,
+  collaborationMode,
+  permissionProfile,
+  availablePermissionProfiles,
+  permissionProfileChangePending,
+  setCollaborationMode,
+  setPermissionProfile,
 } = useAgentForHuman(address, sessionId)
 
-await setSessionMode('accept_edits')
+setCollaborationMode('plan')
+await setPermissionProfile(':workspace')
 ```
 
-`setSessionMode` owns ACP request IDs, session correlation, acknowledgement validation,
-timeouts, and disconnect handling. It rejects without changing `mode` when the Host
-refuses or the outcome is unknown. `plan` is not a server policy and is never accepted by
-this API; products may layer a Plan workflow over an acknowledged Host `safe` mode.
+Render only `availablePermissionProfiles`, disable prompts while
+`permissionProfileChangePending` is true, and await `setPermissionProfile`
+before presenting new authority. It owns ACP request IDs, session correlation,
+acknowledgement validation, timeouts, and disconnect handling. A Host refusal
+or unknown outcome leaves `permissionProfile` unchanged. Plan never enters the
+Host permission transaction.
 
-The old `setMode(mode, { turns })` remains temporarily for source compatibility but is
-optimistic and deprecated. New React applications must not use it or construct ACP frames.
+`setSessionMode`, `availableModes`, and `modeChangePending` remain temporarily
+as deprecated aliases. The deprecated synchronous `setMode` accepts only local
+`default` / `plan`; permission values throw instead of fabricating Host state.
+New applications should use the separate APIs and must not construct ACP
+frames.
 
 ## Current plan
 
