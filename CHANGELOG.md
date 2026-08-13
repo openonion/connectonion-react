@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.2-alpha.2 — 2026-08-13
+
+Consumer-validated follow-up for route handoff and connection recovery.
+
+### Fixed
+
+- Preserve the newest `useAgentForHuman` subscription when an older overlapping
+  route owner unmounts.
+- Keep `checkSessionStatus()` observational so polling cannot silently reconnect
+  the owned transport or hide an explicit disconnected state.
+
+### Release boundary
+
+- Publish under the npm `alpha` dist-tag; stable `latest` remains `0.4.1`.
+- O Chat should pin `0.4.2-alpha.2` exactly after publication.
+- Rollback remains an exact dependency change to `0.4.1`; the retired standalone
+  TypeScript SDK remains outside the browser path.
+
 ## 0.4.2-alpha.1 — 2026-08-13
 
 Follow-up preview that completes the native ACP permission-tool lifecycle.
