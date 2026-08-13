@@ -310,7 +310,12 @@ export function useAgentForHuman(
     setPermissionProfileChangePending(agent.permissionProfileChangePending);
     if (agent.ui.length > 0 || agent.availablePermissionProfiles.length > 0) flush();
 
-    return () => { agent.onMessage = null; };
+    return () => {
+      // A route transition can mount the next hook before this owner unmounts.
+      // Only detach the callback this effect installed; otherwise the older
+      // cleanup erases the newer page's subscription and state stops updating.
+      if (agent._onMessage === flush) agent.onMessage = null;
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent]);
 
