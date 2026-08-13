@@ -1,4 +1,5 @@
 import { RemoteAgent } from '../src/connect/remote-agent';
+import { registerNativeACPDriver } from '../src/connect/native-acp-runtime';
 
 const SESSION_ID = 'reconnect-session';
 
@@ -52,8 +53,59 @@ describe('RemoteAgent reconnect races', () => {
   });
 
   afterEach(() => {
+    registerNativeACPDriver(null);
     jest.clearAllTimers();
     jest.useRealTimers();
+  });
+
+  test('a legacy status query never reconnects the owned transport', async () => {
+    registerNativeACPDriver({ open: jest.fn() } as any);
+    const agent = remoteAgent();
+    agent._transportSelection = {
+      kind: 'legacy-direct',
+      httpUrl: 'https://agent.example',
+      wsUrl: 'wss://agent.example/ws',
+    };
+    agent._ensureConnected = jest.fn().mockResolvedValue(undefined);
+
+    const checking = agent.checkSessionStatus(SESSION_ID);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const statusSocket = FakeSocket.instances[0] as any;
+    statusSocket.readyState = 1;
+    statusSocket.onopen?.({});
+    statusSocket.onmessage?.({
+      data: JSON.stringify({ type: 'SESSION_STATUS', status: 'not_found' }),
+    });
+
+    await expect(checking).resolves.toBe('not_found');
+    expect(agent._ensureConnected).not.toHaveBeenCalled();
+    expect(agent.connectionState).toBe('disconnected');
+  });
+
+  test('a disconnected native status query waits for explicit reconnect', async () => {
+    registerNativeACPDriver({ open: jest.fn() } as any);
+    const agent = remoteAgent();
+    agent._transportSelection = {
+      kind: 'native-acp',
+      httpUrl: 'https://agent.example',
+      transport: {
+        protocol_version: 1,
+        type: 'websocket',
+        path: '/acp',
+        authorization: {
+          type: 'connectonion-ticket',
+          path: '/acp/authorize',
+        },
+      },
+    };
+    agent._ensureConnected = jest.fn().mockResolvedValue(undefined);
+
+    await expect(agent.checkSessionStatus(SESSION_ID)).resolves.toBe('not_found');
+    expect(agent._ensureConnected).not.toHaveBeenCalled();
+    expect(FakeSocket.instances).toHaveLength(0);
+    expect(agent.connectionState).toBe('disconnected');
   });
 
   test('reconnect is a no-op for an authenticated open session', async () => {
