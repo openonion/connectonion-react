@@ -435,6 +435,137 @@ describe('native ACP RemoteAgent lifecycle', () => {
     ]));
   });
 
+  test('preserves the Host terminal status for a permission tool', async () => {
+    const permissionStarted = deferred<void>();
+    const native = harness({
+      async prompt(request) {
+        const response = native.handlers.requestPermission({
+          requestId: 'permission-1',
+          sessionId: request.sessionId,
+          toolCall: {
+            toolCallId: 'tool-1',
+            title: 'Write file',
+            rawInput: { path: 'README.md' },
+            status: 'pending',
+          },
+          options: [
+            { optionId: 'allow_once', name: 'Allow once', kind: 'allow_once' },
+            { optionId: 'reject_once', name: 'Reject', kind: 'reject_once' },
+          ],
+        });
+        permissionStarted.resolve();
+        await response;
+        native.handlers.onSessionUpdate(request.sessionId, {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'tool-1',
+          status: 'completed',
+        });
+        return { stopReason: 'end_turn' };
+      },
+    });
+    registerNativeACPDriver(native.driver);
+    const { remote } = agent();
+
+    const turn = remote.input('Edit it');
+    await permissionStarted.promise;
+    remote.respondToApproval(true, 'once');
+    await turn;
+
+    expect(remote.ui).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'tool-1', type: 'tool_call', status: 'done' }),
+      expect.objectContaining({ id: 'permission-1', type: 'approval_needed', answered: true }),
+    ]));
+  });
+
+  test('settles every unanswered-terminal tool when one prompt requests permission repeatedly', async () => {
+    const firstStarted = deferred<void>();
+    const secondStarted = deferred<void>();
+    const options = [
+      { optionId: 'allow_once', name: 'Allow once', kind: 'allow_once' },
+      { optionId: 'reject_once', name: 'Reject', kind: 'reject_once' },
+    ];
+    const native = harness({
+      async prompt(request) {
+        const first = native.handlers.requestPermission({
+          requestId: 'permission-1',
+          sessionId: request.sessionId,
+          toolCall: {
+            toolCallId: 'tool-1',
+            title: 'Write first file',
+            status: 'pending',
+          },
+          options,
+        });
+        firstStarted.resolve();
+        await first;
+        const second = native.handlers.requestPermission({
+          requestId: 'permission-2',
+          sessionId: request.sessionId,
+          toolCall: {
+            toolCallId: 'tool-2',
+            title: 'Write second file',
+            status: 'pending',
+          },
+          options,
+        });
+        secondStarted.resolve();
+        await second;
+        return { stopReason: 'cancelled' };
+      },
+    });
+    registerNativeACPDriver(native.driver);
+    const { remote } = agent();
+
+    const turn = remote.input('Edit twice');
+    await firstStarted.promise;
+    remote.respondToApproval(true, 'once');
+    await secondStarted.promise;
+    remote.respondToApproval(false, 'once', 'reject_hard');
+    await expect(turn).resolves.toEqual({ text: '', done: false });
+
+    expect(remote.ui).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'tool-1', type: 'tool_call', status: 'error' }),
+      expect.objectContaining({ id: 'tool-2', type: 'tool_call', status: 'error' }),
+      expect.objectContaining({ id: 'permission-1', type: 'approval_needed', answered: true }),
+      expect.objectContaining({ id: 'permission-2', type: 'approval_needed', answered: true }),
+    ]));
+  });
+
+  test('settles a permission tool when the native prompt fails', async () => {
+    const permissionStarted = deferred<void>();
+    const native = harness({
+      async prompt(request) {
+        const response = native.handlers.requestPermission({
+          requestId: 'permission-1',
+          sessionId: request.sessionId,
+          toolCall: {
+            toolCallId: 'tool-1',
+            title: 'Write file',
+            status: 'pending',
+          },
+          options: [
+            { optionId: 'allow_once', name: 'Allow once', kind: 'allow_once' },
+          ],
+        });
+        permissionStarted.resolve();
+        await response;
+        throw new Error('tool failed');
+      },
+    });
+    registerNativeACPDriver(native.driver);
+    const { remote } = agent();
+
+    const turn = remote.input('Edit it');
+    await permissionStarted.promise;
+    remote.respondToApproval(true, 'once');
+    await expect(turn).rejects.toThrow('tool failed');
+
+    expect(remote.ui).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'tool-1', type: 'tool_call', status: 'error' }),
+      expect.objectContaining({ id: 'permission-1', type: 'approval_needed', answered: true }),
+    ]));
+  });
+
   test('awaits acknowledged mode change and closes the runtime without deleting its durable ID', async () => {
     const native = harness();
     registerNativeACPDriver(native.driver);

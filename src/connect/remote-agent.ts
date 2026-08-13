@@ -201,6 +201,7 @@ export class RemoteAgent {
   private _native: NativeACPConnection | null = null;
   private _nativePrompt: Promise<Response> | null = null;
   private _nativePromptReject: ((error: Error) => void) | null = null;
+  private _nativePermissionToolIds = new Set<string>();
   private _nativeResponseText = '';
   private _nativePermissionProfileChangePending = false;
   private _nativeAdmission: ACPBrowserAdmission | undefined;
@@ -864,6 +865,7 @@ export class RemoteAgent {
     this._connectionState = 'disconnected';
     this._error = null;
     this._pendingApproval = null;
+    this._nativePermissionToolIds.clear();
     this._transportSelection = null;
     this._selectingTransport = null;
     this._nativeAdmission = undefined;
@@ -1283,6 +1285,7 @@ export class RemoteAgent {
       throw error;
     }
     const connectionEpoch = this._connectionEpoch;
+    this._nativePermissionToolIds.clear();
     this._nativeResponseText = '';
     let rejectPrompt!: (error: Error) => void;
     const externallyRejected = new Promise<never>((_resolve, reject) => {
@@ -1296,7 +1299,7 @@ export class RemoteAgent {
           throw new Error('Connection reset');
         }
         this._clearPlaceholder();
-        this._failUnsettledNativePermissionTool();
+        this._failUnsettledNativePermissionTools();
         this._pendingApproval = null;
         this._status = 'idle';
         this._onMessage?.();
@@ -1310,7 +1313,7 @@ export class RemoteAgent {
         if (connectionEpoch !== this._connectionEpoch) throw error;
         this._error = error;
         this._clearPlaceholder();
-        this._failUnsettledNativePermissionTool();
+        this._failUnsettledNativePermissionTools();
         this._pendingApproval = null;
         this._status = 'idle';
         this._onMessage?.();
@@ -1451,6 +1454,7 @@ export class RemoteAgent {
         native: { request, resolve },
       };
       this._status = 'waiting';
+      this._nativePermissionToolIds.add(toolCallId);
       if (existingItem?.type === 'tool_call') {
         existingItem.name = request.toolCall.title!;
         if (request.toolCall.rawInput !== undefined) existingItem.args = arguments_;
@@ -1489,16 +1493,17 @@ export class RemoteAgent {
       ?? request.options.find((option) => option.kind === preferredKind);
   }
 
-  private _failUnsettledNativePermissionTool(): void {
-    const toolCallId = this._pendingApproval?.native?.request.toolCall.toolCallId;
-    if (!toolCallId) return;
-    const item = this._chatItems.find(
-      (candidate) => candidate.type === 'tool_call' && candidate.id === toolCallId,
-    );
-    // The prompt has ended, so `running` is no longer truthful. Without an
-    // official terminal tool update, fail closed instead of manufacturing a
-    // successful side effect or leaving restored UIs permanently active.
-    if (item?.type === 'tool_call' && item.status === 'running') item.status = 'error';
+  private _failUnsettledNativePermissionTools(): void {
+    for (const toolCallId of this._nativePermissionToolIds) {
+      const item = this._chatItems.find(
+        (candidate) => candidate.type === 'tool_call' && candidate.id === toolCallId,
+      );
+      // The prompt has ended, so `running` is no longer truthful. Without an
+      // official terminal tool update, fail closed instead of manufacturing a
+      // successful side effect or leaving restored UIs permanently active.
+      if (item?.type === 'tool_call' && item.status === 'running') item.status = 'error';
+    }
+    this._nativePermissionToolIds.clear();
   }
 
   private _asRecord(value: unknown): Record<string, unknown> {

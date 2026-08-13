@@ -24,8 +24,9 @@ Alpha preview of the React-owned authenticated native ACP browser lifecycle.
 - Create or reuse the stable running tool card when native ACP sends a
   permission request before its tool update, keeping O Chat's inline approval
   controls visible without adding protocol logic to the product UI.
-- Fail an unresolved permission tool card at the prompt boundary instead of
-  claiming success or leaving the consumer UI permanently running.
+- Fail every unresolved permission tool card at the prompt boundary instead of
+  claiming success or leaving the consumer UI permanently running, including
+  prompts that request permission more than once.
 
 ### Security and compatibility
 
