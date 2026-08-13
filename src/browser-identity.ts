@@ -6,7 +6,12 @@
  * exist only while creating, importing, or migrating an identity; they are
  * never written back to Web Storage.
  */
-import * as bip39 from 'bip39';
+import {
+  generateMnemonic,
+  mnemonicToSeedSync,
+  validateMnemonic,
+} from '@scure/bip39';
+import { wordlist as englishWordlist } from '@scure/bip39/wordlists/english';
 import nacl from 'tweetnacl';
 
 const DATABASE_NAME = 'connectonion-browser-identity';
@@ -114,10 +119,10 @@ function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 
 function privateSeedFromMnemonic(mnemonic: string): Uint8Array {
   const normalized = mnemonic.trim().toLowerCase().replace(/\s+/g, ' ');
-  if (!bip39.validateMnemonic(normalized)) {
+  if (!validateMnemonic(normalized, englishWordlist)) {
     throw new BrowserIdentityCorruptError('Invalid BIP39 recovery phrase');
   }
-  const expanded = bip39.mnemonicToSeedSync(normalized);
+  const expanded = mnemonicToSeedSync(normalized);
   const seed = new Uint8Array(expanded.slice(0, 32));
   expanded.fill(0);
   return seed;
@@ -524,7 +529,7 @@ export function createBrowserIdentityService(runtime: BrowserIdentityRuntime) {
       };
     }
 
-    const mnemonic = bip39.generateMnemonic(128);
+    const mnemonic = generateMnemonic(englishWordlist, 128);
     const recovery: BrowserRecoverySecret = { kind: 'mnemonic', value: mnemonic };
     const prepared = await prepareFromSeed(privateSeedFromMnemonic(mnemonic), recovery);
     const inserted = await runtime.store.add(prepared.record);
@@ -595,7 +600,7 @@ export function createBrowserIdentityService(runtime: BrowserIdentityRuntime) {
 
     create(): Promise<BrowserIdentityInitialization> {
       return replaceIdentity(async () => {
-        const mnemonic = bip39.generateMnemonic(128);
+        const mnemonic = generateMnemonic(englishWordlist, 128);
         const recovery: BrowserRecoverySecret = { kind: 'mnemonic', value: mnemonic };
         const prepared = await prepareFromSeed(privateSeedFromMnemonic(mnemonic), recovery);
         const identity = await replaceStoredIdentity(prepared);

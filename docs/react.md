@@ -492,6 +492,10 @@ identity fails closed without generating a replacement address. Browsers that
 lack WebCrypto Ed25519 or IndexedDB receive an actionable error; the SDK never
 falls back to clear-text persistence.
 
+Explicit create/import replacements also fail closed: the SDK restores the
+previous stored identity if candidate verification or legacy cleanup fails, and
+never returns a replacement until the complete operation succeeds.
+
 This protects raw key material at rest and from bulk Web Storage exfiltration.
 It cannot stop injected same-origin JavaScript from asking the non-extractable
 key to sign while the origin is compromised. CSP, trusted dependencies, and

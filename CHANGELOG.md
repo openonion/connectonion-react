@@ -13,6 +13,8 @@
   phrases and raw private keys are never persisted by the new API.
 - Route legacy WebSocket, native ACP ticket admission, onboarding, and
   transcription through one async signer boundary.
+- Restore the previous stored identity when an explicit create/import
+  replacement fails verification or legacy cleanup.
 
 ### Compatibility
 

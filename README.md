@@ -87,6 +87,10 @@ write or verification fails, the legacy record remains available for recovery.
 There is no clear-text fallback when WebCrypto, Ed25519, or IndexedDB is
 unavailable.
 
+Explicit create/import replacements restore the previous stored identity if
+verification or legacy cleanup fails. Callers only receive a replacement after
+the complete operation succeeds.
+
 Non-extractable storage prevents ordinary storage export from yielding the raw
 private key. It does not make a compromised origin safe: injected same-origin
 JavaScript could still request signatures while it is running. Keep CSP,

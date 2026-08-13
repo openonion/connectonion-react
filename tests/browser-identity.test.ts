@@ -1,4 +1,9 @@
-import * as bip39 from 'bip39';
+import {
+  entropyToMnemonic,
+  mnemonicToSeedSync,
+  validateMnemonic,
+} from '@scure/bip39';
+import { wordlist as englishWordlist } from '@scure/bip39/wordlists/english';
 import nacl from 'tweetnacl';
 
 import {
@@ -13,6 +18,8 @@ class MemoryIdentityStore {
   record: unknown | null = null;
   failAdd = false;
   corruptNextPut = false;
+  putCalls = 0;
+  failPutOnCall: number | null = null;
 
   async get(): Promise<unknown | null> {
     return this.record;
@@ -26,6 +33,8 @@ class MemoryIdentityStore {
   }
 
   async put(record: unknown): Promise<void> {
+    this.putCalls += 1;
+    if (this.putCalls === this.failPutOnCall) throw new Error('simulated rollback failure');
     this.record = this.corruptNextPut ? { invalid: true } : record;
     this.corruptNextPut = false;
   }
@@ -65,7 +74,7 @@ function bytesToHex(bytes: Uint8Array): string {
 
 function legacyRecord(mnemonic?: string): { json: string; address: string; secretKey: Uint8Array } {
   const seed = mnemonic
-    ? new Uint8Array(bip39.mnemonicToSeedSync(mnemonic).slice(0, 32))
+    ? mnemonicToSeedSync(mnemonic).slice(0, 32)
     : new Uint8Array(32).fill(7);
   const keys = nacl.sign.keyPair.fromSeed(seed);
   const address = `0x${bytesToHex(keys.publicKey)}`;
@@ -107,7 +116,7 @@ describe('secure browser identity', () => {
     const created = await service.initialize();
     expect(created.source).toBe('created');
     expect(created.recovery?.kind).toBe('mnemonic');
-    expect(bip39.validateMnemonic(created.recovery?.value ?? '')).toBe(true);
+    expect(validateMnemonic(created.recovery?.value ?? '', englishWordlist)).toBe(true);
 
     const stored = shared.store.record as { privateKey: CryptoKey; publicKey: Uint8Array };
     expect(stored.privateKey.type).toBe('private');
@@ -135,7 +144,7 @@ describe('secure browser identity', () => {
   });
 
   test('migrates a legacy mnemonic record to the same address and deletes it only after verification', async () => {
-    const mnemonic = bip39.entropyToMnemonic('00000000000000000000000000000000');
+    const mnemonic = entropyToMnemonic(new Uint8Array(16), englishWordlist);
     const legacy = new MemoryLegacyStorage();
     const old = legacyRecord(mnemonic);
     legacy.seed(old.json);
@@ -261,7 +270,7 @@ describe('secure browser identity', () => {
     const shared = runtime();
     const service = createBrowserIdentityService(shared);
     const before = await service.initialize();
-    const mnemonic = bip39.entropyToMnemonic('ffffffffffffffffffffffffffffffff');
+    const mnemonic = entropyToMnemonic(new Uint8Array(16).fill(0xff), englishWordlist);
 
     const imported = await service.import(mnemonic);
     const reloaded = await createBrowserIdentityService(shared).initialize();
@@ -282,6 +291,18 @@ describe('secure browser identity', () => {
 
     const reloaded = await createBrowserIdentityService(shared).initialize();
     expect(reloaded.identity.address).toBe(before.identity.address);
+  });
+
+  test('reports corruption when a failed replacement cannot be rolled back', async () => {
+    const shared = runtime();
+    const service = createBrowserIdentityService(shared);
+    await service.initialize();
+    shared.store.corruptNextPut = true;
+    shared.store.failPutOnCall = 2;
+
+    await expect(service.create()).rejects.toThrow(
+      'replacement failed and the previous record could not be restored',
+    );
   });
 
   test('deletes an unverifiable replacement when no previous identity existed', async () => {
@@ -311,6 +332,16 @@ describe('secure browser identity', () => {
     const reloaded = await createBrowserIdentityService(shared).initialize();
     expect(reloaded.identity.address).toBe(before.identity.address);
     expect(legacy.getItem('connectonion_keys')).toBeNull();
+  });
+
+  test('keeps the existing BIP39-to-Ed25519 derivation contract', async () => {
+    const mnemonic = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+
+    const imported = await createBrowserIdentityService(runtime()).import(mnemonic);
+
+    expect(imported.identity.address).toBe(
+      '0xc5785e1865b708938aff8161d573006496663b1aa10834e396dc566869a2c66a',
+    );
   });
 
   test('does not let concurrent replacements return stale recovery material', async () => {
