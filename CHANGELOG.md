@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.4.2-alpha.3 — 2026-08-14
+
+Consumer-validated follow-up for Turbopack route-module isolation.
+
+### Fixed
+
+- Share one versioned live-agent registry across browser module evaluations, so
+  landing and session routes reuse the same warmed agent and native ACP session.
+- Keep SSR and incompatible global values module-local instead of sharing state
+  across requests or trusting a foreign registry shape.
+- Preserve the bounded LRU, explicit drop/clear behavior, and a non-overwritable
+  browser registry property.
+
+### Release boundary
+
+- Publish under the npm `alpha` dist-tag; stable `latest` remains `0.4.1`.
+- O Chat should pin `0.4.2-alpha.3` exactly and validate both Turbopack development
+  and production builds before release.
+- Rollback remains an exact dependency change to `0.4.2-alpha.2` or stable
+  `0.4.1`; the retired standalone TypeScript SDK remains outside the browser path.
+
 ## 0.4.2-alpha.2 — 2026-08-13
 
 Consumer-validated follow-up for route handoff and connection recovery.
