@@ -10,6 +10,8 @@ Follow-up preview that completes the native ACP permission-tool lifecycle.
   requests cannot leave an earlier card permanently `running`.
 - Preserve an official Host terminal tool update; otherwise fail each unresolved
   permission tool closed at successful, cancelled, and failed prompt boundaries.
+- Clear stale transport errors after a successful reconnect and propagate the
+  cleared state through `useAgentForHuman`.
 
 ### Release boundary
 
