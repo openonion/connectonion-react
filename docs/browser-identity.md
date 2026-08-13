@@ -50,9 +50,14 @@ separate required controls.
    record. A failure preserves the old recovery path.
 7. Concurrent initializers converge on the one IndexedDB record that wins the
    add transaction. A losing creator discards its unused phrase.
-8. Missing WebCrypto Ed25519 or IndexedDB support fails with an actionable error.
+8. Explicit create/import replacements snapshot the current stored record and
+   become visible only after read-back signing verification and legacy cleanup.
+   A failed replacement restores the snapshot (or deletes an unverified first
+   candidate); a failed rollback surfaces a corruption error instead of
+   reporting success.
+9. Missing WebCrypto Ed25519 or IndexedDB support fails with an actionable error.
    There is no clear-text fallback.
-9. Raw-key helpers remain explicit in-memory compatibility tools. They do not
+10. Raw-key helpers remain explicit in-memory compatibility tools. They do not
    load or save browser storage.
 
 WebCrypto explicitly expects serializable `CryptoKey` objects to be persisted by

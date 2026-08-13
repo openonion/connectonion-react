@@ -17,6 +17,9 @@ import {
 class MemoryIdentityStore {
   record: unknown | null = null;
   failAdd = false;
+  corruptNextPut = false;
+  putCalls = 0;
+  failPutOnCall: number | null = null;
 
   async get(): Promise<unknown | null> {
     return this.record;
@@ -30,7 +33,14 @@ class MemoryIdentityStore {
   }
 
   async put(record: unknown): Promise<void> {
-    this.record = record;
+    this.putCalls += 1;
+    if (this.putCalls === this.failPutOnCall) throw new Error('simulated rollback failure');
+    this.record = this.corruptNextPut ? { invalid: true } : record;
+    this.corruptNextPut = false;
+  }
+
+  async delete(): Promise<void> {
+    this.record = null;
   }
 }
 
@@ -269,6 +279,59 @@ describe('secure browser identity', () => {
     expect(imported.recovery).toBeUndefined();
     expect(imported.identity.address).not.toBe(before.identity.address);
     expect(reloaded.identity.address).toBe(imported.identity.address);
+  });
+
+  test('restores the previous identity when replacement verification fails', async () => {
+    const shared = runtime();
+    const service = createBrowserIdentityService(shared);
+    const before = await service.initialize();
+    shared.store.corruptNextPut = true;
+
+    await expect(service.create()).rejects.toBeInstanceOf(BrowserIdentityCorruptError);
+
+    const reloaded = await createBrowserIdentityService(shared).initialize();
+    expect(reloaded.identity.address).toBe(before.identity.address);
+  });
+
+  test('reports corruption when a failed replacement cannot be rolled back', async () => {
+    const shared = runtime();
+    const service = createBrowserIdentityService(shared);
+    await service.initialize();
+    shared.store.corruptNextPut = true;
+    shared.store.failPutOnCall = 2;
+
+    await expect(service.create()).rejects.toThrow(
+      'replacement failed and storage rollback failed',
+    );
+  });
+
+  test('deletes an unverifiable replacement when no previous identity existed', async () => {
+    const shared = runtime();
+    shared.store.corruptNextPut = true;
+
+    await expect(
+      createBrowserIdentityService(shared).create(),
+    ).rejects.toBeInstanceOf(BrowserIdentityCorruptError);
+
+    expect(shared.store.record).toBeNull();
+  });
+
+  test('restores the previous identity when legacy cleanup blocks replacement', async () => {
+    const legacy = new MemoryLegacyStorage();
+    const old = legacyRecord();
+    legacy.seed(old.json);
+    const shared = runtime(new MemoryIdentityStore(), legacy);
+    const service = createBrowserIdentityService(shared);
+    const before = await service.initialize();
+
+    legacy.seed(old.json);
+    legacy.failRemove = true;
+    await expect(service.create()).rejects.toThrow('legacy private-key record could not be removed');
+
+    legacy.failRemove = false;
+    const reloaded = await createBrowserIdentityService(shared).initialize();
+    expect(reloaded.identity.address).toBe(before.identity.address);
+    expect(legacy.getItem('connectonion_keys')).toBeNull();
   });
 
   test('keeps the existing BIP39-to-Ed25519 derivation contract', async () => {
