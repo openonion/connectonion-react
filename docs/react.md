@@ -66,6 +66,31 @@ const {
 | `address` | `string` | Agent's public address (0x...) |
 | `sessionId` | `string` | Required unique ID for this conversation |
 
+## Native ACP transport selection
+
+Modern ESM imports of `@connectonion/react` register the official ACP SDK driver. Before a
+prompt, the hook performs non-cacheable `/info` discovery and chooses exactly one path:
+
+- an exact ConnectOnion ACP descriptor selects direct native ACP;
+- a successful matching response with the descriptor genuinely absent selects legacy
+  compatibility;
+- malformed discovery and every native admission, initialize, session, resume, or prompt
+  failure fail closed without opening `/ws`.
+
+CommonJS `require('@connectonion/react')` remains legacy-compatible. Components do not need to
+import the low-level native module and must not construct JSON-RPC frames.
+
+The native client sends `cwd: "/"`, `mcpServers: []`, and no Host path. It stores the
+server-issued ACP session ID separately from the application `sessionId`; resume restores
+private Agent continuation while the persisted `ui` array remains the rendering source.
+Images and embedded files use the capabilities and content blocks negotiated through ACP.
+
+If the authenticated Host requires onboarding, the original `connect()` or `input()` remains
+pending. A signed invite/payment submission retries admission and then continues that exact
+attempt, so the first prompt is neither lost nor sent twice. Payment is addressed to the exact
+Agent identity already matched during discovery; the Host independently verifies the transfer.
+An invalid submission keeps one retryable `onboard_required` state. Reset cancels the waiter.
+
 ## UI Events
 
 The `ui` array contains events for rendering the conversation. Each event has:
@@ -82,6 +107,8 @@ The `ui` array contains events for rendering the conversation. Each event has:
 | `tool_call` | Tool execution | `name`, `args`, `status`, `result` |
 | `ask_user` | Agent question | `text: string` |
 | `approval_needed` | Tool requires a decision | `tool`, `arguments`, `description?`, `answered?` |
+| `onboard_required` | Host admission needs invite/payment | `methods`, `paymentAmount?`, `paymentAddress?` |
+| `onboard_success` | Admission completed | `level`, `message` |
 
 A ConnectOnion Host may deliver its public, application-authored thought text through ACP
 `agent_thought_chunk`; the SDK normalizes it to `thinking` and de-duplicates it

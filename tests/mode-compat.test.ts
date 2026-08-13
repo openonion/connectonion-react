@@ -56,6 +56,18 @@ describe('previous permission vocabulary compatibility', () => {
     });
   });
 
+  test('persists only a bounded non-empty server-issued ACP session ID', () => {
+    expect(normalizeSessionState({
+      session_id: 'ui-route',
+      acp_session_id: 'server-session',
+    })).toEqual({
+      session_id: 'ui-route',
+      acp_session_id: 'server-session',
+    });
+    expect(normalizeSessionState({ acp_session_id: '' })).toEqual({});
+    expect(normalizeSessionState({ acp_session_id: 'x'.repeat(257) })).toEqual({});
+  });
+
   test('normalizes a previous checkpoint card before exposing it', () => {
     expect(normalizeChatItems([{
       id: 'checkpoint-1',

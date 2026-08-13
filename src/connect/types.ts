@@ -137,6 +137,8 @@ export interface PlanEntry {
 
 export interface SessionState {
   session_id?: string;
+  /** Server-issued native ACP session ID; separate from the UI route/cache key. */
+  acp_session_id?: string;
   messages?: Array<{ role: string; content: string }>;
   trace?: unknown[];
   turn?: number;
