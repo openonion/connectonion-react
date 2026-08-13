@@ -468,6 +468,7 @@ export function createBrowserIdentityService(runtime: BrowserIdentityRuntime) {
           );
         }
         removeLegacyIdentity(runtime.legacyStorage);
+        return { identity: stored, source: 'migrated', recovery: legacy.recovery };
       }
       return { identity: stored, source: 'loaded' };
     }
@@ -600,13 +601,15 @@ export async function initializeBrowserIdentity(): Promise<BrowserIdentityInitia
 }
 
 export async function createBrowserIdentity(): Promise<BrowserIdentityInitialization> {
+  const initialized = await service().create();
   pendingRecovery = null;
-  return service().create();
+  return initialized;
 }
 
 export async function importBrowserIdentity(input: string): Promise<BrowserIdentityInitialization> {
+  const initialized = await service().import(input);
   pendingRecovery = null;
-  return service().import(input);
+  return initialized;
 }
 
 /**

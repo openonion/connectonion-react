@@ -5,6 +5,7 @@ import {
   BrowserIdentityCorruptError,
   claimPendingBrowserRecovery,
   createBrowserIdentityService,
+  importBrowserIdentity,
   retainPendingBrowserRecovery,
 } from '../src/browser-identity';
 
@@ -82,6 +83,15 @@ describe('secure browser identity', () => {
 
     expect(claimPendingBrowserRecovery()).toEqual(recovery);
     expect(claimPendingBrowserRecovery()).toBeNull();
+  });
+
+  test('does not discard pending recovery when an explicit replacement fails', async () => {
+    const recovery = { kind: 'mnemonic', value: 'still-current recovery' } as const;
+    retainPendingBrowserRecovery(recovery);
+
+    await expect(importBrowserIdentity('not valid recovery material')).rejects.toThrow();
+
+    expect(claimPendingBrowserRecovery()).toEqual(recovery);
   });
 
   test('creates one non-extractable identity and reloads it without recovery material', async () => {
@@ -204,6 +214,29 @@ describe('secure browser identity', () => {
     expect(store.record).not.toBeNull();
     legacy.failRemove = false;
     expect(legacy.getItem('connectonion_keys')).toBe(old.json);
+  });
+
+  test('returns recovery when a verified migration finishes after a removal retry', async () => {
+    const legacy = new MemoryLegacyStorage();
+    const old = legacyRecord();
+    legacy.seed(old.json);
+    legacy.failRemove = true;
+    const service = createBrowserIdentityService(runtime(new MemoryIdentityStore(), legacy));
+
+    await expect(service.initialize()).rejects.toThrow(
+      'legacy private-key record could not be removed',
+    );
+
+    legacy.failRemove = false;
+    const migrated = await service.initialize();
+
+    expect(migrated.source).toBe('migrated');
+    expect(migrated.identity.address).toBe(old.address);
+    expect(migrated.recovery).toEqual({
+      kind: 'private-key',
+      value: bytesToHex(old.secretKey),
+    });
+    expect(legacy.getItem('connectonion_keys')).toBeNull();
   });
 
   test('concurrent creators converge on the one record that won IndexedDB add', async () => {
