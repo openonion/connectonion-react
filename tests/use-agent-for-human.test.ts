@@ -262,6 +262,29 @@ describe('useAgentForHuman hook', () => {
       expect(lastAgent.content).toBe('Echo: Hello');
     });
 
+    it('keeps the newer subscription when an overlapping hook owner unmounts', async () => {
+      const addr = uniqueAddr();
+      const first = renderHook(() =>
+        useAgentForHuman(addr, 'handoff-session')
+      );
+      const second = renderHook(() =>
+        useAgentForHuman(addr, 'handoff-session')
+      );
+
+      // Route transitions can mount the session page before the landing page
+      // cleanup runs. The old owner must not clear the new owner's callback.
+      first.unmount();
+
+      await act(async () => {
+        second.result.current.input('After handoff');
+        await flush();
+      });
+
+      const lastAgent = second.result.current.ui.filter(e => e.type === 'agent').pop() as any;
+      expect(lastAgent.content).toBe('Echo: After handoff');
+      second.unmount();
+    });
+
     it('handles multiple sequential inputs', async () => {
       const addr = uniqueAddr();
       const { result } = renderHook(() =>
