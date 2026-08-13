@@ -130,10 +130,10 @@ stable `toolCallId` before appending `approval_needed`. Components can always
 render the decision inline with that running tool card without parsing ACP or
 inventing a second correlation rule.
 
-At the prompt boundary, a permission tool card that still lacks an official
+At the prompt boundary, every permission tool card that still lacks an official
 terminal update becomes `error`. React does not manufacture success from a
-selected permission, and a stale `running` card cannot keep a restored UI
-permanently active.
+selected permission, and stale `running` cards cannot keep a restored UI
+permanently active, including when one prompt requests permission more than once.
 
 ```tsx
 const { ui, respondToApproval } = useAgentForHuman(address, sessionId);
