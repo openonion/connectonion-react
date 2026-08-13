@@ -301,7 +301,7 @@ describe('secure browser identity', () => {
     shared.store.failPutOnCall = 2;
 
     await expect(service.create()).rejects.toThrow(
-      'replacement failed and the previous record could not be restored',
+      'replacement failed and storage rollback failed',
     );
   });
 

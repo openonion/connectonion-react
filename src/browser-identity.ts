@@ -489,7 +489,7 @@ export function createBrowserIdentityService(runtime: BrowserIdentityRuntime) {
         else await runtime.store.put(previous);
       } catch (rollbackCause) {
         throw new BrowserIdentityCorruptError(
-          `Browser identity replacement failed and the previous record could not be restored: ${String(rollbackCause)}`,
+          `Browser identity replacement failed and storage rollback failed: ${String(rollbackCause)}`,
         );
       }
       throw cause;
