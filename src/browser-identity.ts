@@ -66,7 +66,8 @@ interface StoredBrowserIdentity {
 interface BrowserIdentityStore {
   get(): Promise<unknown | null>;
   add(record: StoredBrowserIdentity): Promise<boolean>;
-  put(record: StoredBrowserIdentity): Promise<void>;
+  put(record: unknown): Promise<void>;
+  delete(): Promise<void>;
 }
 
 interface LegacyStorage {
@@ -395,7 +396,7 @@ function indexedDBStore(indexedDBProvider: IDBFactory): BrowserIdentityStore {
       }
     },
 
-    async put(record: StoredBrowserIdentity): Promise<void> {
+    async put(record: unknown): Promise<void> {
       const database = await openDatabase(indexedDBProvider);
       try {
         await new Promise<void>((resolve, reject) => {
@@ -404,6 +405,21 @@ function indexedDBStore(indexedDBProvider: IDBFactory): BrowserIdentityStore {
           transaction.oncomplete = () => resolve();
           transaction.onerror = () => reject(transaction.error ?? new Error('Identity write failed'));
           transaction.onabort = () => reject(transaction.error ?? new Error('Identity write aborted'));
+        });
+      } finally {
+        database.close();
+      }
+    },
+
+    async delete(): Promise<void> {
+      const database = await openDatabase(indexedDBProvider);
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const transaction = database.transaction(OBJECT_STORE, 'readwrite');
+          transaction.objectStore(OBJECT_STORE).delete(IDENTITY_ID);
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error ?? new Error('Identity delete failed'));
+          transaction.onabort = () => reject(transaction.error ?? new Error('Identity delete aborted'));
         });
       } finally {
         database.close();
@@ -453,6 +469,26 @@ export function createBrowserIdentityService(runtime: BrowserIdentityRuntime) {
 
   async function prepareFromSeed(seed: Uint8Array, recovery?: BrowserRecoverySecret): Promise<PreparedIdentity> {
     return { record: await recordFromSeed(seed, runtime.crypto), recovery };
+  }
+
+  async function replaceStoredIdentity(prepared: PreparedIdentity): Promise<BrowserIdentity> {
+    const previous = await runtime.store.get();
+    await runtime.store.put(prepared.record);
+    try {
+      const identity = await verifyWrite(prepared.record.address);
+      removeLegacyIdentity(runtime.legacyStorage);
+      return identity;
+    } catch (cause) {
+      try {
+        if (previous === null) await runtime.store.delete();
+        else await runtime.store.put(previous);
+      } catch (rollbackCause) {
+        throw new BrowserIdentityCorruptError(
+          `Browser identity replacement failed and the previous record could not be restored: ${String(rollbackCause)}`,
+        );
+      }
+      throw cause;
+    }
   }
 
   async function initialize(): Promise<BrowserIdentityInitialization> {
@@ -562,9 +598,7 @@ export function createBrowserIdentityService(runtime: BrowserIdentityRuntime) {
         const mnemonic = bip39.generateMnemonic(128);
         const recovery: BrowserRecoverySecret = { kind: 'mnemonic', value: mnemonic };
         const prepared = await prepareFromSeed(privateSeedFromMnemonic(mnemonic), recovery);
-        await runtime.store.put(prepared.record);
-        const identity = await verifyWrite(prepared.record.address);
-        removeLegacyIdentity(runtime.legacyStorage);
+        const identity = await replaceStoredIdentity(prepared);
         cachedIdentity = identity;
         return { identity, source: 'created', recovery };
       });
@@ -574,9 +608,7 @@ export function createBrowserIdentityService(runtime: BrowserIdentityRuntime) {
       return replaceIdentity(async () => {
         const seed = seedFromRecovery(input);
         const prepared = await prepareFromSeed(seed);
-        await runtime.store.put(prepared.record);
-        const identity = await verifyWrite(prepared.record.address);
-        removeLegacyIdentity(runtime.legacyStorage);
+        const identity = await replaceStoredIdentity(prepared);
         cachedIdentity = identity;
         return { identity, source: 'imported' };
       });
