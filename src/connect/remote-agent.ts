@@ -886,13 +886,24 @@ export class RemoteAgent {
 
   async checkSessionStatus(sessionId: string): Promise<RemoteSessionStatus> {
     if (getNativeACPDriver()) {
-      if (sessionId !== this._currentSession?.session_id) return 'not_found';
+      let selection: BrowserTransportSelection;
       try {
-        await this._ensureConnected();
+        selection = await this._selectTransport();
       } catch {
         return 'not_found';
       }
-      if (this._native) return this._nativePrompt ? 'running' : 'connected';
+      if (selection.kind === 'native-acp') {
+        if (sessionId !== this._currentSession?.session_id || !this._native) {
+          return 'not_found';
+        }
+        return this._nativePrompt ? 'running' : 'connected';
+      }
+      // A status query may resolve where a legacy status socket should dial, but
+      // it must never establish or replace the RemoteAgent's owned connection.
+      this._resolvedEndpoint = selection.kind === 'legacy-direct'
+        ? { httpUrl: selection.httpUrl, wsUrl: selection.wsUrl }
+        : undefined;
+      this._endpointResolutionAttempted = true;
     }
     // If we have a live WS, send SESSION_STATUS over it (no new connection needed)
     if (this._authenticated && this._isSocketOpen(this._ws)) {
