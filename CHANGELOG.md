@@ -12,6 +12,11 @@ Follow-up preview that completes the native ACP permission-tool lifecycle.
   permission tool closed at successful, cancelled, and failed prompt boundaries.
 - Clear stale transport errors after a successful reconnect and propagate the
   cleared state through `useAgentForHuman`.
+- Preserve the newest hook subscription during an overlapping route handoff so
+  an older cleanup cannot stop connection, dashboard, or recovery updates.
+- Keep `checkSessionStatus()` observational: it may discover the selected
+  transport, but only an explicit connect/reconnect operation can reopen the
+  owned native or legacy connection.
 
 ### Release boundary
 
