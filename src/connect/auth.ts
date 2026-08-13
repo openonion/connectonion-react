@@ -1,54 +1,60 @@
-/**
- * @llm-note
- *   Dependencies: imports from [src/address] | imported by [src/connect/remote-agent.ts, src/connect/handlers.ts]
- *   Data flow: ensureKeys resolves or generates Ed25519 keypair | signPayload signs messages for authenticated requests
- *   State/Effects: ensureKeys may write to localStorage (browser) | no persistent module state
- */
+/** Shared signer boundary for legacy WebSocket and native ACP authentication. */
 import * as address from '../address';
+import {
+  initializeBrowserIdentity,
+  retainPendingBrowserRecovery,
+  type MessageSigner,
+} from '../browser-identity';
+
+export type { MessageSigner } from '../browser-identity';
 
 export function isBrowser(): boolean {
-  return typeof globalThis !== 'undefined' &&
-    typeof (globalThis as { window?: unknown }).window !== 'undefined' &&
-    typeof (globalThis as { localStorage?: unknown }).localStorage !== 'undefined';
+  return typeof globalThis !== 'undefined'
+    && typeof (globalThis as { window?: unknown }).window !== 'undefined';
 }
 
 export function sortedStringify(obj: Record<string, unknown>): string {
   const sortedKeys = Object.keys(obj).sort();
   const sortedObj: Record<string, unknown> = {};
-  for (const key of sortedKeys) {
-    sortedObj[key] = obj[key];
-  }
+  for (const key of sortedKeys) sortedObj[key] = obj[key];
   return JSON.stringify(sortedObj);
 }
 
-export function ensureKeys(existing?: address.AddressData): address.AddressData {
-  if (existing) return existing;
-  const inBrowser = isBrowser();
-  const loaded = inBrowser ? address.loadBrowser() : address.load();
-  if (loaded) return loaded;
-  const keys = inBrowser ? address.generateBrowser() : address.generate();
-  if (inBrowser) address.saveBrowser(keys);
-  return keys;
+export function signerFromKeys(keys: address.AddressData, browser = isBrowser()): MessageSigner {
+  return {
+    address: keys.address,
+    sign(message: string): string {
+      return browser ? address.signBrowser(keys, message) : address.sign(keys, message);
+    },
+  };
 }
 
-/**
- * Sign a payload with Ed25519 keys.
- * Returns the signed envelope { payload, from, signature, timestamp }
- * or a fallback { prompt } if no keys provided.
- */
-export function signPayload(
-  keys: address.AddressData | undefined,
-  payload: Record<string, unknown>,
-): Record<string, unknown> {
-  if (!keys) {
-    return { prompt: payload.prompt };
+export async function ensureSigner(
+  existing?: MessageSigner,
+  keys?: address.AddressData,
+): Promise<MessageSigner> {
+  if (existing) return existing;
+  if (keys) return signerFromKeys(keys);
+  if (isBrowser()) {
+    const initialized = await initializeBrowserIdentity();
+    if (initialized.recovery) retainPendingBrowserRecovery(initialized.recovery);
+    return initialized.identity;
   }
-  const canonicalMessage = sortedStringify(payload);
-  const signer = isBrowser() ? address.signBrowser : address.sign;
-  const signature = signer(keys, canonicalMessage);
+
+  const nodeKeys = address.load() ?? address.generate();
+  return signerFromKeys(nodeKeys, false);
+}
+
+/** Sign one canonical protocol payload through the selected identity provider. */
+export async function signPayload(
+  signer: MessageSigner | undefined,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  if (!signer) return { prompt: payload.prompt };
+  const signature = await signer.sign(sortedStringify(payload));
   return {
     payload,
-    from: keys.address,
+    from: signer.address,
     signature,
     timestamp: payload.timestamp,
   };

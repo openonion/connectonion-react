@@ -19,10 +19,6 @@ import { getStore } from '../src/store';
 jest.mock('../src/address-browser', () => ({
   generate: () => ({ address: '0xmock', privateKey: new Uint8Array(64), publicKey: new Uint8Array(32) }),
   generateBrowser: () => ({ address: '0xmock', privateKey: new Uint8Array(64), publicKey: new Uint8Array(32) }),
-  load: () => null,
-  loadBrowser: () => null,
-  save: () => {},
-  saveBrowser: () => {},
   sign: () => 'mock-signature',
   signBrowser: () => 'mock-signature',
 }));
@@ -140,6 +136,7 @@ jest.mock('../src/connect', () => {
     connect: (address: string) => new actual.RemoteAgent(address, {
       relayUrl: 'ws://localhost',
       wsCtor: DynamicWS as any,
+      signer: { address: '0xmock', sign: () => 'mock-signature' },
     }),
   };
 });

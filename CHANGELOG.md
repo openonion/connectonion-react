@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+- Replace the default clear-text browser private-key record with a
+  non-extractable Ed25519 `CryptoKey` persisted through IndexedDB.
+- Migrate a validated legacy `localStorage['connectonion_keys']` identity to the
+  same address, deleting the old record only after the secure write signs and
+  verifies successfully.
+- Return recovery material only from the first create/migrate caller. Recovery
+  phrases and raw private keys are never persisted by the new API.
+- Route legacy WebSocket, native ACP ticket admission, onboarding, and
+  transcription through one async signer boundary.
+
+### Compatibility
+
+- `generateBrowser`, `signBrowser`, and `createSignedPayloadBrowser` remain
+  explicit in-memory raw-key helpers. Unsafe synchronous `saveBrowser` and
+  `loadBrowser` exports are removed.
+- `signOnboard()` is asynchronous because a non-extractable WebCrypto key signs
+  through `SubtleCrypto`.
+
 ## 0.4.2-alpha.2 — 2026-08-13
 
 Consumer-validated follow-up for route handoff and connection recovery.

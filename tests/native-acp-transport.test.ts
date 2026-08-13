@@ -146,6 +146,31 @@ describe('signed browser ticket admission', () => {
     });
   });
 
+  test('awaits an async non-extractable-key signer before sending admission', async () => {
+    const keys = address.generateBrowser();
+    const sign = jest.fn(async (message: string) => address.signBrowser(keys, message));
+    let sentHeaders: HeadersInit | undefined;
+
+    await authorizeAuthenticatedACP({
+      agentAddress: AGENT,
+      httpUrl: 'https://agent.example',
+      transport: TRANSPORT,
+      signer: { address: keys.address, sign },
+    }, {
+      fetch: jest.fn(async (_input, init) => {
+        sentHeaders = init?.headers;
+        return ticketResponse();
+      }) as typeof fetch,
+      crypto: deterministicCrypto() as never,
+      now: () => 1_700_000_000_000,
+    });
+
+    expect(sign).toHaveBeenCalledTimes(1);
+    const headers = new Headers(sentHeaders);
+    expect(headers.get('x-co-from')).toBe(keys.address);
+    expect(headers.get('x-co-signature')).toBe(await sign.mock.results[0].value);
+  });
+
   test('binds onboarding fields into the exact signed body', async () => {
     const keys = address.generateBrowser();
     let sentBody: BodyInit | null | undefined;

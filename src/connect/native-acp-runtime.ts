@@ -6,6 +6,7 @@
  * until they deliberately move to the native-capable import condition.
  */
 import type { AddressData } from '../address-browser';
+import type { MessageSigner } from '../browser-identity';
 import type {
   ACPBrowserAdmission,
   ACPWebSocketTransport,
@@ -106,7 +107,9 @@ export interface NativeACPDriverOptions {
   readonly agentAddress: string;
   readonly httpUrl: string;
   readonly transport: ACPWebSocketTransport;
-  readonly keys: AddressData;
+  readonly signer?: MessageSigner;
+  /** @deprecated Raw keys are accepted by the public experimental adapter. */
+  readonly keys?: AddressData;
   readonly admission?: ACPBrowserAdmission;
 }
 

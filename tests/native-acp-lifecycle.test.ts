@@ -240,7 +240,7 @@ describe('native ACP RemoteAgent lifecycle', () => {
       }),
     ]));
 
-    remote.send(remote.signOnboard({ inviteCode: 'BETA' }));
+    remote.send(await remote.signOnboard({ inviteCode: 'BETA' }));
     const response = await turn;
 
     expect(admissions).toEqual([undefined, { inviteCode: 'BETA', payment: undefined }]);
@@ -276,7 +276,7 @@ describe('native ACP RemoteAgent lifecycle', () => {
     const turn = remote.input('Run after admission');
     await firstAdmission.promise;
     await Promise.resolve();
-    remote.send(remote.signOnboard({ inviteCode: 'WRONG' }));
+    remote.send(await remote.signOnboard({ inviteCode: 'WRONG' }));
     await refusedAdmission.promise;
     await Promise.resolve();
 
@@ -284,7 +284,7 @@ describe('native ACP RemoteAgent lifecycle', () => {
     expect(remote.error?.message).toContain('admission refused');
     expect(remote.ui.filter((item) => item.type === 'onboard_required')).toHaveLength(1);
 
-    remote.send(remote.signOnboard({ inviteCode: 'BETA' }));
+    remote.send(await remote.signOnboard({ inviteCode: 'BETA' }));
     await expect(turn).resolves.toEqual({ text: 'Native answer', done: true });
     expect(native.calls.prompts).toHaveLength(1);
     expect(remote.ui.filter((item) => item.type === 'onboard_success')).toHaveLength(1);
