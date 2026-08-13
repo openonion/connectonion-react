@@ -49,4 +49,23 @@ describe('agent-cache', () => {
     dropAgent(ADDR, 's1');
     expect(acquireAgent(ADDR, 's1')).not.toBe(a);
   });
+
+  test('keeps isolated server module caches separate', () => {
+    type CacheModule = typeof import('../src/agent-cache');
+    let firstModule!: CacheModule;
+    let secondModule!: CacheModule;
+
+    jest.isolateModules(() => {
+      firstModule = require('../src/agent-cache') as CacheModule;
+    });
+    jest.isolateModules(() => {
+      secondModule = require('../src/agent-cache') as CacheModule;
+    });
+
+    expect(firstModule.acquireAgent(ADDR, 'server-session')).not.toBe(
+      secondModule.acquireAgent(ADDR, 'server-session'),
+    );
+    firstModule._clearAgentCache();
+    secondModule._clearAgentCache();
+  });
 });

@@ -17,16 +17,60 @@ import { connect } from './connect';
 
 type Agent = ReturnType<typeof connect>;
 
+interface AgentRegistry {
+  version: 1;
+  liveAgents: Map<string, Agent>;
+}
+
 // How many background connections stay live. A handful of open panels never hits this;
 // it only bounds a runaway (visiting dozens of sessions) so connections don't leak.
 export const MAX_LIVE_AGENTS = 6;
 
-const liveAgents = new Map<string, Agent>();
+const REGISTRY_VERSION = 1;
+const REGISTRY_KEY = Symbol.for('@connectonion/react.live-agent-registry.v1');
+const moduleLiveAgents = new Map<string, Agent>();
+
+function isAgentRegistry(value: unknown): value is AgentRegistry {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Partial<AgentRegistry>;
+  return candidate.version === REGISTRY_VERSION && candidate.liveAgents instanceof Map;
+}
+
+/**
+ * Share connections between browser bundles evaluated in the same realm. Next.js can
+ * evaluate this module once per Turbopack route; a realm-owned registry lets those
+ * copies reuse the same session lease. Server renders remain request/module local.
+ */
+function getLiveAgents(): Map<string, Agent> {
+  if (typeof window === 'undefined' || globalThis !== window) return moduleLiveAgents;
+
+  const realm = globalThis as unknown as Record<PropertyKey, unknown>;
+  const existing = Object.getOwnPropertyDescriptor(realm, REGISTRY_KEY);
+  if (existing) {
+    return isAgentRegistry(existing.value) ? existing.value.liveAgents : moduleLiveAgents;
+  }
+  if (!Object.isExtensible(realm)) return moduleLiveAgents;
+
+  const registry: AgentRegistry = {
+    version: REGISTRY_VERSION,
+    liveAgents: new Map<string, Agent>(),
+  };
+
+  Object.defineProperty(realm, REGISTRY_KEY, {
+    value: registry,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+
+  return registry.liveAgents;
+}
 
 const keyOf = (address: string, sessionId: string) => `${address}:${sessionId}`;
 
 /** Return the live agent for this session, reusing the cached connection if present. */
 export function acquireAgent(address: string, sessionId: string): Agent {
+  const liveAgents = getLiveAgents();
   const key = keyOf(address, sessionId);
 
   const existing = liveAgents.get(key);
@@ -52,11 +96,12 @@ export function acquireAgent(address: string, sessionId: string): Agent {
 
 /** Forget a session's cached agent (after an explicit reset), so the next acquire is fresh. */
 export function dropAgent(address: string, sessionId: string): void {
-  liveAgents.delete(keyOf(address, sessionId));
+  getLiveAgents().delete(keyOf(address, sessionId));
 }
 
 /** Test/teardown helper: close and forget every cached agent. */
 export function _clearAgentCache(): void {
+  const liveAgents = getLiveAgents();
   for (const agent of liveAgents.values()) agent.reset();
   liveAgents.clear();
 }
