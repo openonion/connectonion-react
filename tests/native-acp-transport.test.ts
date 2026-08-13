@@ -70,6 +70,28 @@ describe('DD-046 transport discovery', () => {
 });
 
 describe('signed browser ticket admission', () => {
+  test('invokes a captured browser fetch with the Window/global receiver', async () => {
+    const browserFetch = jest.fn(function (this: unknown) {
+      if (this !== globalThis) throw new TypeError('Illegal invocation');
+      return Promise.resolve(ticketResponse());
+    });
+
+    await expect(authorizeAuthenticatedACP({
+      agentAddress: AGENT,
+      httpUrl: 'https://agent.example',
+      transport: TRANSPORT,
+      keys: address.generateBrowser(),
+    }, {
+      fetch: browserFetch as unknown as typeof fetch,
+      crypto: deterministicCrypto() as never,
+      now: Date.now,
+    })).resolves.toEqual({
+      url: 'wss://agent.example/acp',
+      protocols: ['acp', `connectonion.ticket.${TICKET}`],
+    });
+    expect(browserFetch).toHaveBeenCalledTimes(1);
+  });
+
   test('signs exact bytes, omits credentials, and opens one stream through the official adapter contract', async () => {
     const keys = address.generateBrowser();
     let request: { url: string; init: RequestInit } | undefined;

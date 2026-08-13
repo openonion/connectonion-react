@@ -17,6 +17,16 @@ Alpha preview of the React-owned authenticated native ACP browser lifecycle.
 - Invite/payment onboarding that pauses and resumes the original prompt once,
   plus stable message/thought chunk accumulation.
 
+### Fixed
+
+- Bind captured browser `fetch` to the real global receiver so Chromium can
+  complete signed native admission without an `Illegal invocation` error.
+- Create or reuse the stable running tool card when native ACP sends a
+  permission request before its tool update, keeping O Chat's inline approval
+  controls visible without adding protocol logic to the product UI.
+- Fail an unresolved permission tool card at the prompt boundary instead of
+  claiming success or leaving the consumer UI permanently running.
+
 ### Security and compatibility
 
 - Native ACP is selected only from the exact supported discovery descriptor.

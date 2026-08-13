@@ -124,6 +124,17 @@ Render one approval item and answer it through the hook. The React package owns
 ACP request IDs, Host session correlation, legacy fallback, and duplicate
 suppression; components should not construct protocol frames.
 
+Native ACP may deliver `session/request_permission` before a separate tool
+update. React therefore creates or reuses one `tool_call` with the request's
+stable `toolCallId` before appending `approval_needed`. Components can always
+render the decision inline with that running tool card without parsing ACP or
+inventing a second correlation rule.
+
+At the prompt boundary, a permission tool card that still lacks an official
+terminal update becomes `error`. React does not manufacture success from a
+selected permission, and a stale `running` card cannot keep a restored UI
+permanently active.
+
 ```tsx
 const { ui, respondToApproval } = useAgentForHuman(address, sessionId);
 const approval = ui.find(item =>

@@ -409,12 +409,28 @@ describe('native ACP RemoteAgent lifecycle', () => {
     const turn = remote.input('Edit it');
     await permissionStarted.promise;
     expect(remote.status).toBe('waiting');
+    expect(remote.ui).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'tool-1',
+        type: 'tool_call',
+        name: 'Write file',
+        args: { path: 'README.md' },
+        status: 'running',
+      }),
+      expect.objectContaining({
+        id: 'permission-1',
+        type: 'approval_needed',
+        tool: 'Write file',
+      }),
+    ]));
+    expect(remote.ui.filter((item) => item.id === 'tool-1')).toHaveLength(1);
     remote.respondToApproval(true, 'once');
     remote.respondToApproval(true, 'once');
     await turn;
 
     expect(native.calls.cancels).toEqual([]);
     expect(remote.ui).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'tool-1', type: 'tool_call', status: 'error' }),
       expect.objectContaining({ id: 'permission-1', type: 'approval_needed', answered: true }),
     ]));
   });

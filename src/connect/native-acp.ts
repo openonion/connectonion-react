@@ -317,7 +317,13 @@ export async function authorizeAuthenticatedACP(
   if (authorizeUrl.protocol === 'http:' && !isLoopback(authorizeUrl)) {
     throw new Error('Native ACP requires HTTPS outside loopback');
   }
-  const response = await runtime.fetch(authorizeUrl, {
+  // Browser `window.fetch` is a Web IDL method and some engines reject an
+  // unbound call. The production ESM driver stores it in the runtime seam, so
+  // calling it as `runtime.fetch(...)` supplies the seam object as `this`
+  // instead of Window and Chromium throws "Illegal invocation" before the
+  // signed authorization request leaves the page. Call with the real global
+  // receiver; injected test fetchers remain ordinary functions and ignore it.
+  const response = await runtime.fetch.call(globalThis, authorizeUrl, {
     method: 'POST',
     body,
     cache: 'no-store',
