@@ -56,6 +56,17 @@ interface AuthorizedACPWebSocket {
   readonly protocols: string[];
 }
 
+/** Admission failure classification used by the React lifecycle gate. */
+export class ACPBrowserAdmissionError extends Error {
+  constructor(
+    readonly status: number,
+    readonly reason: 'trust' | 'other',
+  ) {
+    super(`ACP browser admission refused (${status})`);
+    this.name = 'ACPBrowserAdmissionError';
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -191,7 +202,33 @@ async function boundedResponseText(response: Response): Promise<string> {
 
 async function readTicket(response: Response): Promise<string[]> {
   if (response.status !== 201) {
-    throw new Error(`ACP browser admission refused (${response.status})`);
+    let reason: 'trust' | 'other' = 'other';
+    try {
+      const contentType = response.headers.get('content-type')
+        ?.split(';', 1)[0]
+        .trim()
+        .toLowerCase();
+      const cacheDirectives = response.headers.get('cache-control')
+        ?.toLowerCase()
+        .split(',')
+        .map((directive) => directive.trim());
+      if (
+        response.status === 403
+        && contentType === 'application/json'
+        && cacheDirectives?.includes('no-store')
+      ) {
+        const error = JSON.parse(await boundedResponseText(response));
+        if (
+          isRecord(error)
+          && typeof error.error === 'string'
+          && error.error.startsWith('forbidden:')
+        ) reason = 'trust';
+      }
+    } catch {
+      // The status is still terminal. Malformed error details are never used to
+      // grant a trust flow or weaken native transport selection.
+    }
+    throw new ACPBrowserAdmissionError(response.status, reason);
   }
   const contentType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
   if (contentType !== 'application/json') {

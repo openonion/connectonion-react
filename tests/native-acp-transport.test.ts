@@ -3,6 +3,7 @@ import { createHash, webcrypto } from 'crypto';
 import * as address from '../src/address-browser';
 import { verify } from '../src/address';
 import {
+  ACPBrowserAdmissionError,
   authorizeAuthenticatedACP,
   decodeACPTransport,
   type ACPWebSocketTransport,
@@ -145,6 +146,40 @@ describe('signed browser ticket admission', () => {
 
     expect(sentBody).toBe('{"invite_code":"BETA","payment":5}');
   });
+
+  test.each([
+    [403, 'no-store', 'trust'],
+    [403, null, 'other'],
+    [500, 'no-store', 'other'],
+  ] as const)(
+    'recognizes only a non-cacheable 403 forbidden response as a trust gate',
+    async (status, cacheControl, reason) => {
+      const response = new Response(JSON.stringify({ error: 'forbidden: onboard required' }), {
+        status,
+        headers: {
+          'content-type': 'application/json',
+          ...(cacheControl ? { 'cache-control': cacheControl } : {}),
+        },
+      });
+
+      const attempt = authorizeAuthenticatedACP({
+        agentAddress: AGENT,
+        httpUrl: 'https://agent.example',
+        transport: TRANSPORT,
+        keys: address.generateBrowser(),
+      }, {
+        fetch: jest.fn(async () => response) as unknown as typeof fetch,
+        crypto: deterministicCrypto() as never,
+        now: Date.now,
+      });
+
+      await expect(attempt).rejects.toEqual(expect.objectContaining({
+        name: ACPBrowserAdmissionError.name,
+        status,
+        reason,
+      }));
+    },
+  );
 
   test.each([
     new Response('{}', { status: 403, headers: { 'content-type': 'application/json' } }),

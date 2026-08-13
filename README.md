@@ -42,15 +42,24 @@ function Chat({ address, sessionId }: { address: string; sessionId: string }) {
 | `isChatItemType` / `isEventType` | type guards that narrow a `ChatItem` by its `type` |
 | `fetchAgentInfo(address)` | one-shot public agent info |
 | `connect(address, options?)` from `@connectonion/react/connect` | low-level connection API |
-| `createAuthenticatedACPStream(options)` from `@connectonion/react/experimental/native-acp` | preview ESM-only native ACP admission + official WebSocket stream; not yet selected by `connect()` |
+| `createAuthenticatedACPStream(options)` from `@connectonion/react/experimental/native-acp` | low-level ESM-only native ACP admission + official WebSocket stream used by the package root |
 | `generateBrowser` / `saveBrowser` / `loadBrowser` / `signBrowser` / `createSignedPayloadBrowser` | Ed25519 browser identity |
 | types | `ChatItem`, `AgentInfo`, `SkillInfo`, `CollaborationMode`, `PermissionProfile`, `Message`, `Response`, … |
 
-The experimental native ACP entry accepts an exact DD-046 transport descriptor and never
-falls back after admission starts. Existing `connect()` and React hooks still use the legacy
-transport until discovery, initialization, session lifecycle, and reconnect can switch as one
-atomic change. Application UIs should continue using the hook rather than importing this
-preview directly.
+The package root's ESM `import` condition registers the official ACP SDK driver.
+`connect()` and the React hooks then select one browser transport before sending input:
+an exact DD-046 descriptor selects direct native ACP, genuine descriptor absence selects
+bounded legacy compatibility, and malformed discovery or any failure after native selection
+fails closed without opening `/ws`. The CommonJS `require` condition remains on the legacy
+transport for compatibility. Application UIs should keep using the hook instead of parsing ACP
+or importing the low-level preview directly.
+
+Native sessions send the virtual network `cwd: "/"` and `mcpServers: []`, persist the
+server-issued ACP session ID separately from the application's route/cache ID, and resume
+without transcript replay. Text, supported raster images, and embedded files map to official
+ACP content blocks. Onboarding pauses the original connection/input and resumes that exact
+attempt after a verified invite or payment; it never asks the UI to resend the prompt. Agent
+and thought chunks accumulate by stable ACP message ID.
 
 ## Codex-style collaboration and permissions
 
@@ -157,7 +166,7 @@ npm run build
 
 The test suite exercises the connection implementation bundled in this package, including
 the React hooks, protocol mapping, trust checks, and browser-safe endpoint selection.
-`npm run build` also imports the emitted ESM preview through the real official ACP SDK and
+`npm run build` also imports the emitted ESM package root through the real official ACP SDK and
 verifies that exactly one `/acp` socket receives the one-use ticket only as a subprotocol.
 
 ## License

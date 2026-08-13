@@ -49,6 +49,21 @@ import {
 import { ensureKeys, signPayload } from './auth';
 import { mapEventToChatItem } from './chat-item-mapper';
 import {
+  ACPBrowserAdmissionError,
+  type ACPBrowserAdmission,
+} from './native-acp';
+import {
+  getNativeACPDriver,
+  type NativeACPConnection,
+  type NativeACPContentBlock,
+  type NativeACPPermissionRequest,
+  type NativeACPPermissionResponse,
+} from './native-acp-runtime';
+import {
+  selectBrowserTransport,
+  type BrowserTransportSelection,
+} from './transport-selection';
+import {
   isCanonicalPermissionProfile,
   normalizeCollaborationMode,
   normalizePermissionProfile,
@@ -70,9 +85,11 @@ import {
   decodeACPPlanUpdate,
   decodeACPPermissionRequest,
   decodeACPSetModeResponse,
+  decodeNativeACPUpdate,
   decodeLegacyPlanUpdate,
   hostSessionModeState,
   hostSupportsACPCancel,
+  normalizeNativeSessionModeState,
   normalizePlanEntries,
   parsePermissionProfile,
 } from './wire-events';
@@ -81,6 +98,10 @@ interface PendingApproval {
   chatItemId: string;
   answered: boolean;
   acp?: ACPPermissionRequest;
+  native?: {
+    request: NativeACPPermissionRequest;
+    resolve: (response: NativeACPPermissionResponse) => void;
+  };
 }
 
 interface PendingPermissionProfileChange {
@@ -94,6 +115,11 @@ interface PendingPermissionProfileChange {
 
 interface ReconnectReadyWaiter {
   resolve: () => void;
+  reject: (error: Error) => void;
+}
+
+interface NativeAdmissionWaiter {
+  resolve: (admission: ACPBrowserAdmission) => void;
   reject: (error: Error) => void;
 }
 
@@ -170,6 +196,16 @@ export class RemoteAgent {
   private _reconnectReadyWaiters: ReconnectReadyWaiter[] = [];
   private _pendingApproval: PendingApproval | null = null;
   private _pendingPermissionProfileChange: PendingPermissionProfileChange | null = null;
+  private _transportSelection: BrowserTransportSelection | null = null;
+  private _selectingTransport: Promise<BrowserTransportSelection> | null = null;
+  private _native: NativeACPConnection | null = null;
+  private _nativePrompt: Promise<Response> | null = null;
+  private _nativePromptReject: ((error: Error) => void) | null = null;
+  private _nativeResponseText = '';
+  private _nativePermissionProfileChangePending = false;
+  private _nativeAdmission: ACPBrowserAdmission | undefined;
+  private _nativeAdmissionWaiter: NativeAdmissionWaiter | null = null;
+  private _connectionEpoch = 0;
 
   _onMessage: (() => void) | null = null;
   set onMessage(fn: (() => void) | null) { this._onMessage = fn; }
@@ -209,7 +245,8 @@ export class RemoteAgent {
     return this._permissionProfileState?.availableModes.map((mode) => ({ ...mode })) ?? [];
   }
   get permissionProfileChangePending(): boolean {
-    return this._pendingPermissionProfileChange !== null;
+    return this._pendingPermissionProfileChange !== null
+      || this._nativePermissionProfileChangePending;
   }
   /** @deprecated Use permissionProfileChangePending. */
   get modeChangePending(): boolean { return this.permissionProfileChangePending; }
@@ -227,9 +264,11 @@ export class RemoteAgent {
    * error is stored on the agent and flushed to subscribers before rethrowing.
    */
   async connect(): Promise<void> {
+    const connectionEpoch = this._connectionEpoch;
     try {
       await this._ensureConnected();
     } catch (err) {
+      if (connectionEpoch !== this._connectionEpoch) throw err;
       // Mirror input()'s failure handling: fire-and-forget callers (the React hook)
       // only observe state through onMessage, so without this an eager connect
       // fails completely silently — no error, no state change, nothing to retry on.
@@ -240,6 +279,10 @@ export class RemoteAgent {
   }
 
   async input(prompt: string, options?: { images?: string[]; files?: import('./types').FileAttachment[] }): Promise<Response> {
+    if (this._nativePrompt) {
+      throw new Error('Native ACP session is already processing a prompt');
+    }
+    const connectionEpoch = this._connectionEpoch;
     this._addChatItem({ type: 'user', content: prompt, images: options?.images, files: options?.files });
 
     const isInterjection = this._status === 'working' && this._inputResolve !== null;
@@ -255,14 +298,22 @@ export class RemoteAgent {
     try {
       await this._ensureConnected();
     } catch (err) {
+      if (connectionEpoch !== this._connectionEpoch) throw err;
       // Restore the status machine before rethrowing: fire-and-forget callers
       // (useAgentForHuman) only observe state via onMessage, and without this
       // a connection/signing failure leaves the UI stuck on 'working' forever.
       this._error = err instanceof Error ? err : new Error(String(err));
       this._clearPlaceholder();
-      this._status = 'idle';
+      const onboarding = this._chatItems.some(
+        (item) => item.type === 'onboard_required',
+      );
+      this._status = onboarding ? 'waiting' : 'idle';
       this._onMessage?.();
       throw err;
+    }
+
+    if (this._native) {
+      return this._promptNative(prompt, options);
     }
 
     const inputId = generateUUID();
@@ -305,6 +356,23 @@ export class RemoteAgent {
   reconnect(sessionId?: string): Promise<Response> {
     const sid = sessionId || this._currentSession?.session_id;
     if (!sid) return Promise.reject(new Error('No session to reconnect'));
+    if (getNativeACPDriver()) {
+      if (this._hasReadyConnection()) {
+        return Promise.resolve({ text: '', done: true });
+      }
+      this._connectionState = 'reconnecting';
+      this._onMessage?.();
+      return this._ensureConnected()
+        .then(() => ({ text: '', done: true }))
+        .catch((cause) => {
+          const error = cause instanceof Error ? cause : new Error(String(cause));
+          this._error = error;
+          this._status = 'idle';
+          this._connectionState = 'disconnected';
+          this._onMessage?.();
+          throw error;
+        });
+    }
     if (this._hasReadyConnection()) {
       return Promise.resolve({ text: '', done: true });
     }
@@ -399,6 +467,29 @@ export class RemoteAgent {
       );
       return;
     }
+    if (message.type === 'ONBOARD_SUBMIT' && this._transportSelection?.kind === 'native-acp') {
+      const payload = this._asRecord(message.payload);
+      const inviteCode = typeof payload.invite_code === 'string'
+        ? payload.invite_code
+        : undefined;
+      const payment = typeof payload.payment === 'number'
+        ? payload.payment
+        : undefined;
+      const admission = { inviteCode, payment };
+      this._error = null;
+      const waiter = this._nativeAdmissionWaiter;
+      if (waiter) {
+        this._nativeAdmissionWaiter = null;
+        waiter.resolve(admission);
+      } else {
+        this._nativeAdmission = admission;
+        void this.connect().catch(() => {});
+      }
+      return;
+    }
+    if (this._native) {
+      throw new Error(`Native ACP does not support Host message ${String(message.type)}`);
+    }
     if (message.type === 'ONBOARD_SUBMIT') {
       this._sendOpen(message);
     } else {
@@ -435,6 +526,31 @@ export class RemoteAgent {
     const pending = this._pendingApproval;
     if (!pending || pending.answered) return;
     const rejectionMode = approvalRejectMode(mode);
+    if (pending.native) {
+      const option = this._nativePermissionOption(
+        pending.native.request,
+        approved,
+        scope,
+        rejectionMode,
+      );
+      pending.answered = true;
+      pending.native.resolve({
+        outcome: option
+          ? { outcome: 'selected', optionId: option.optionId }
+          : { outcome: 'cancelled' },
+        ...(!approved && feedback && {
+          _meta: { connectonion: { feedback } },
+        }),
+      });
+      const item = this._chatItems.find(
+        (candidate) => candidate.id === pending.chatItemId
+          && candidate.type === 'approval_needed',
+      );
+      if (item?.type === 'approval_needed') item.answered = true;
+      this._status = 'working';
+      this._onMessage?.();
+      return;
+    }
     const response = pending.acp
       ? acpPermissionResponseFrame(
         pending.acp, approved, scope, rejectionMode, feedback,
@@ -453,6 +569,19 @@ export class RemoteAgent {
     if (this._interruptSent) return;
     const pending = this._pendingApproval;
     if (pending && !pending.answered) {
+      if (pending.native) {
+        pending.answered = true;
+        pending.native.resolve({ outcome: { outcome: 'cancelled' } });
+        const item = this._chatItems.find(
+          (candidate) => candidate.id === pending.chatItemId
+            && candidate.type === 'approval_needed',
+        );
+        if (item?.type === 'approval_needed') item.answered = true;
+        this._status = 'working';
+        this._interruptSent = true;
+        this._onMessage?.();
+        return;
+      }
       const response = pending.acp
         ? acpPermissionCancelledFrame(pending.acp)
         : {
@@ -467,6 +596,15 @@ export class RemoteAgent {
     }
 
     const sessionId = this._currentSession?.session_id;
+    const nativeSessionId = this._currentSession?.acp_session_id;
+    if (this._native && nativeSessionId) {
+      this._interruptSent = true;
+      void this._native.cancel({ sessionId: nativeSessionId }).catch((cause) => {
+        this._error = cause instanceof Error ? cause : new Error(String(cause));
+        this._onMessage?.();
+      });
+      return;
+    }
     const message = this._supportsACPCancel && sessionId
       ? acpCancelFrame(sessionId)
       : { type: 'INTERRUPT' };
@@ -498,9 +636,31 @@ export class RemoteAgent {
       if (this._pendingPermissionProfileChange) {
         throw new Error('A permission profile change is already pending');
       }
+      if (this._nativePermissionProfileChangePending) {
+        throw new Error('A permission profile change is already pending');
+      }
 
       this._error = null;
       await this._ensureConnected();
+      if (this._native) {
+        const nativeSessionId = this._currentSession?.acp_session_id;
+        if (!nativeSessionId) throw new Error('No authenticated native ACP session');
+        const available = this._permissionProfileState?.availableModes ?? [];
+        if (!available.some((item) => item.id === profile)) {
+          throw new Error(`Permission profile is not available: ${profile}`);
+        }
+        if (this._currentSession?.mode === profile) return;
+        this._nativePermissionProfileChangePending = true;
+        this._onMessage?.();
+        try {
+          await this._native.setSessionMode({ sessionId: nativeSessionId, modeId: profile });
+          this._applyServerMode(profile);
+        } finally {
+          this._nativePermissionProfileChangePending = false;
+          this._onMessage?.();
+        }
+        return;
+      }
       const sessionId = this._currentSession?.session_id;
       if (!sessionId || !this._ws || !this._authenticated) {
         throw new Error('No authenticated session');
@@ -688,9 +848,15 @@ export class RemoteAgent {
   }
 
   reset(): void {
+    const resetError = new Error('Connection reset');
+    this._connectionEpoch += 1;
+    this._rejectNativeAdmissionWaiter(resetError);
+    this._nativePromptReject?.(resetError);
+    this._connecting = null;
     const reject = this._inputReject;
     this._reconnecting = null;
-    this._settleReconnectReady(new Error('Connection reset'));
+    this._settleReconnectReady(resetError);
+    this._closeNative(true);
     this._closeWs();
     this._currentSession = null;
     this._chatItems = [];
@@ -698,8 +864,12 @@ export class RemoteAgent {
     this._connectionState = 'disconnected';
     this._error = null;
     this._pendingApproval = null;
+    this._transportSelection = null;
+    this._selectingTransport = null;
+    this._nativeAdmission = undefined;
+    this._nativePermissionProfileChangePending = false;
     this._settleInput();
-    reject?.(new Error('Connection reset'));
+    reject?.(resetError);
     this._settleSessionStatusWaiters('not_found');
   }
 
@@ -713,6 +883,15 @@ export class RemoteAgent {
   }
 
   async checkSessionStatus(sessionId: string): Promise<RemoteSessionStatus> {
+    if (getNativeACPDriver()) {
+      if (sessionId !== this._currentSession?.session_id) return 'not_found';
+      try {
+        await this._ensureConnected();
+      } catch {
+        return 'not_found';
+      }
+      if (this._native) return this._nativePrompt ? 'running' : 'connected';
+    }
     // If we have a live WS, send SESSION_STATUS over it (no new connection needed)
     if (this._authenticated && this._isSocketOpen(this._ws)) {
       return new Promise((resolve) => {
@@ -836,13 +1015,166 @@ export class RemoteAgent {
     if (this._reconnecting) return this._waitForReconnectReady();
     if (this._connecting) return this._connecting;
 
-    const attempt = this._doConnect();
+    const attempt = this._doSelectedConnect();
     this._connecting = attempt;
     // Clear on settle either way (both branches handled, so this derived promise
     // never surfaces as an unhandled rejection — `attempt` is what callers await).
     const clear = () => { if (this._connecting === attempt) this._connecting = null; };
     attempt.then(clear, clear);
     return attempt;
+  }
+
+  private async _doSelectedConnect(): Promise<void> {
+    const driver = getNativeACPDriver();
+    if (!driver) {
+      await this._doConnect();
+      return;
+    }
+    const selection = await this._selectTransport();
+    if (selection.kind === 'native-acp') {
+      await this._doNativeConnect(selection, driver);
+      return;
+    }
+    this._resolvedEndpoint = selection.kind === 'legacy-direct'
+      ? { httpUrl: selection.httpUrl, wsUrl: selection.wsUrl }
+      : undefined;
+    this._endpointResolutionAttempted = true;
+    await this._doConnect();
+  }
+
+  private _selectTransport(): Promise<BrowserTransportSelection> {
+    if (this._transportSelection) return Promise.resolve(this._transportSelection);
+    if (this._selectingTransport) return this._selectingTransport;
+    const attempt = selectBrowserTransport({
+      agentAddress: this.address,
+      relayUrl: this._relayUrl,
+      directUrl: this._directUrl,
+    });
+    this._selectingTransport = attempt;
+    const settle = (selection: BrowserTransportSelection) => {
+      if (this._selectingTransport === attempt) {
+        this._transportSelection = selection;
+        this._selectingTransport = null;
+      }
+      return selection;
+    };
+    const fail = (cause: unknown): never => {
+      if (this._selectingTransport === attempt) this._selectingTransport = null;
+      throw cause;
+    };
+    return attempt.then(settle, fail);
+  }
+
+  private async _doNativeConnect(
+    selection: Extract<BrowserTransportSelection, { kind: 'native-acp' }>,
+    driver: NonNullable<ReturnType<typeof getNativeACPDriver>>,
+  ): Promise<void> {
+    if (this._native) return;
+    const connectionEpoch = this._connectionEpoch;
+    const resumeStatus = this._status === 'working' ? 'working' : 'idle';
+    this._keys = ensureKeys(this._keys);
+    this._connectionState = this._currentSession?.acp_session_id
+      ? 'reconnecting'
+      : 'disconnected';
+    this._onMessage?.();
+
+    let admission = this._nativeAdmission;
+    this._nativeAdmission = undefined;
+    let connection: NativeACPConnection;
+    while (true) {
+      if (connectionEpoch !== this._connectionEpoch) throw new Error('Connection reset');
+      try {
+        connection = await driver.open({
+          agentAddress: this.address,
+          httpUrl: selection.httpUrl,
+          transport: selection.transport,
+          keys: this._keys,
+          admission,
+        }, {
+          onSessionUpdate: (sessionId, update) => {
+            this._handleNativeSessionUpdate(sessionId, update);
+          },
+          requestPermission: (request) => this._requestNativePermission(request),
+          onClose: (error) => this._handleNativeConnectionLoss(error),
+        });
+        if (connectionEpoch !== this._connectionEpoch) {
+          connection.close();
+          throw new Error('Connection reset');
+        }
+        break;
+      } catch (cause) {
+        if (
+          !(cause instanceof ACPBrowserAdmissionError)
+          || cause.reason !== 'trust'
+          || !selection.onboard
+          || (!selection.onboard.inviteCode && selection.onboard.payment === null)
+        ) throw cause;
+
+        this._connectionState = 'disconnected';
+        this._status = 'waiting';
+        this._error = admission ? cause : null;
+        this._showNativeOnboardGate(selection);
+        this._onMessage?.();
+        admission = await this._waitForNativeAdmission();
+        if (connectionEpoch !== this._connectionEpoch) throw new Error('Connection reset');
+        this._status = resumeStatus;
+        this._error = null;
+        this._onMessage?.();
+      }
+    }
+
+    try {
+      if (connection.protocolVersion !== 1) {
+        throw new Error(`Unsupported ACP protocol version: ${connection.protocolVersion}`);
+      }
+      const existing = this._currentSession?.acp_session_id;
+      let modes: unknown;
+      if (existing) {
+        if (connection.agentCapabilities.sessionCapabilities?.resume == null) {
+          throw new Error('Agent does not support ACP session/resume');
+        }
+        const resumed = await connection.resumeSession({
+          sessionId: existing,
+          cwd: '/',
+          mcpServers: [],
+        });
+        modes = resumed.modes;
+      } else {
+        const created = await connection.newSession({ cwd: '/', mcpServers: [] });
+        if (!created.sessionId) throw new Error('Agent returned an empty ACP session ID');
+        if (!this._currentSession) this._currentSession = {};
+        this._currentSession.acp_session_id = created.sessionId;
+        modes = created.modes;
+      }
+      const normalizedModes = normalizeNativeSessionModeState(modes);
+      if (modes != null && !normalizedModes) {
+        throw new Error('Agent returned malformed ACP permission modes');
+      }
+      this._permissionProfileState = normalizedModes;
+      if (normalizedModes) this._applyServerMode(normalizedModes.currentModeId);
+      this._native = connection;
+      this._connectionState = 'connected';
+      this._error = null;
+      if (connection.agentInfo) {
+        this._profile = {
+          address: this.address,
+          name: connection.agentInfo.name,
+          version: connection.agentInfo.version,
+          online: true,
+        };
+      }
+      if (admission) {
+        this._addChatItem({
+          type: 'onboard_success',
+          level: 'contact',
+          message: 'Access granted',
+        });
+      }
+      this._onMessage?.();
+    } catch (cause) {
+      connection.close();
+      throw cause;
+    }
   }
 
   private async _doConnect(): Promise<void> {
@@ -921,6 +1253,299 @@ export class RemoteAgent {
       this._mergeServerChatItems(connected.chat_items as ChatItem[]);
       this._onMessage?.();
     }
+  }
+
+  private async _promptNative(
+    prompt: string,
+    options?: { images?: string[]; files?: import('./types').FileAttachment[] },
+  ): Promise<Response> {
+    if (!this._native) throw new Error('Native ACP connection is not ready');
+    if (this._nativePrompt) {
+      const error = new Error('Native ACP session is already processing a prompt');
+      this._error = error;
+      this._clearPlaceholder();
+      this._status = 'idle';
+      this._onMessage?.();
+      throw error;
+    }
+    const sessionId = this._currentSession?.acp_session_id;
+    if (!sessionId) throw new Error('Native ACP session is absent');
+
+    let blocks: NativeACPContentBlock[];
+    try {
+      blocks = this._nativeContentBlocks(prompt, options);
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      this._error = error;
+      this._clearPlaceholder();
+      this._status = 'idle';
+      this._onMessage?.();
+      throw error;
+    }
+    const connectionEpoch = this._connectionEpoch;
+    this._nativeResponseText = '';
+    let rejectPrompt!: (error: Error) => void;
+    const externallyRejected = new Promise<never>((_resolve, reject) => {
+      rejectPrompt = reject;
+    });
+    this._nativePromptReject = rejectPrompt;
+    const promptRequest = this._native.prompt({ sessionId, prompt: blocks });
+    const attempt = Promise.race([promptRequest, externallyRejected])
+      .then((result): Response => {
+        if (connectionEpoch !== this._connectionEpoch) {
+          throw new Error('Connection reset');
+        }
+        this._clearPlaceholder();
+        this._pendingApproval = null;
+        this._status = 'idle';
+        this._onMessage?.();
+        return {
+          text: this._nativeResponseText,
+          done: result.stopReason !== 'cancelled',
+        };
+      })
+      .catch((cause): never => {
+        const error = cause instanceof Error ? cause : new Error(String(cause));
+        if (connectionEpoch !== this._connectionEpoch) throw error;
+        this._error = error;
+        this._clearPlaceholder();
+        this._pendingApproval = null;
+        this._status = 'idle';
+        this._onMessage?.();
+        throw error;
+      });
+    this._nativePrompt = attempt;
+    const clear = () => {
+      if (this._nativePrompt !== attempt) return;
+      this._nativePrompt = null;
+      this._nativePromptReject = null;
+    };
+    attempt.then(clear, clear);
+    return attempt;
+  }
+
+  private _nativeContentBlocks(
+    prompt: string,
+    options?: { images?: string[]; files?: import('./types').FileAttachment[] },
+  ): NativeACPContentBlock[] {
+    const blocks: NativeACPContentBlock[] = [{ type: 'text', text: prompt }];
+    const capabilities = this._native?.agentCapabilities.promptCapabilities;
+    const images = options?.images ?? [];
+    if (images.length && capabilities?.image !== true) {
+      throw new Error('Agent does not support ACP image prompts');
+    }
+    for (const image of images) {
+      const data = this._parseDataUrl(image);
+      if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(data.mimeType)) {
+        throw new Error(`Unsupported ACP image MIME type: ${data.mimeType}`);
+      }
+      blocks.push({ type: 'image', data: data.base64, mimeType: data.mimeType });
+    }
+
+    const files = options?.files ?? [];
+    if (files.length && capabilities?.embeddedContext !== true) {
+      throw new Error('Agent does not support ACP embedded file prompts');
+    }
+    for (const file of files) {
+      const data = this._parseDataUrl(file.dataUrl);
+      const mimeType = file.type || data.mimeType || 'application/octet-stream';
+      if (mimeType !== data.mimeType && file.type) {
+        throw new Error(`File MIME type does not match its data URL: ${file.name}`);
+      }
+      const uri = `connectonion-upload:/${encodeURIComponent(file.name)}`;
+      blocks.push({
+        type: 'resource',
+        resource: { uri, mimeType, blob: data.base64 },
+      });
+    }
+    return blocks;
+  }
+
+  private _parseDataUrl(value: string): { mimeType: string; base64: string } {
+    const match = /^data:([^;,]{1,127});base64,([A-Za-z0-9+/]*={0,2})$/.exec(value);
+    if (!match || match[2].length % 4 !== 0) {
+      throw new Error('Attachment must be a canonical base64 data URL');
+    }
+    return { mimeType: match[1].toLowerCase(), base64: match[2] };
+  }
+
+  private _handleNativeSessionUpdate(sessionId: string, update: unknown): void {
+    if (sessionId !== this._currentSession?.acp_session_id) return;
+    const record = typeof update === 'object' && update !== null
+      ? update as Record<string, unknown>
+      : null;
+    if (record?.sessionUpdate === 'current_mode_update') {
+      const mode = parsePermissionProfile(record.currentModeId);
+      if (mode && this._applyServerMode(mode)) this._onMessage?.();
+      return;
+    }
+    if (record?.sessionUpdate === 'plan') {
+      const entries = normalizePlanEntries(record.entries);
+      const localSessionId = this._currentSession?.session_id;
+      if (entries && localSessionId && this._applyPlanUpdate(localSessionId, entries)) {
+        this._onMessage?.();
+      }
+      return;
+    }
+    const event = decodeNativeACPUpdate(update);
+    if (!event) return;
+    if (typeof event.content === 'string' && typeof event.id === 'string') {
+      const chunk = event.content;
+      if (event.type === 'assistant') {
+        this._nativeResponseText += chunk;
+        const current = this._chatItems.find(
+          (item) => item.type === 'agent' && item.id === event.id,
+        );
+        if (current?.type === 'agent') event.content = `${current.content}${chunk}`;
+      } else if (event.type === 'thinking') {
+        const current = this._chatItems.find(
+          (item) => item.type === 'thinking' && item.id === event.id,
+        );
+        if (current?.type === 'thinking') {
+          event.content = `${current.content ?? ''}${chunk}`;
+        }
+      }
+    }
+    const accepted = mapEventToChatItem(
+      this._chatItems,
+      event,
+      (item) => this._addChatItem(item),
+      undefined,
+    );
+    if (accepted) {
+      this._clearPlaceholder();
+      this._onMessage?.();
+    }
+  }
+
+  private _requestNativePermission(
+    request: NativeACPPermissionRequest,
+  ): Promise<NativeACPPermissionResponse> {
+    if (request.sessionId !== this._currentSession?.acp_session_id) {
+      return Promise.resolve({ outcome: { outcome: 'cancelled' } });
+    }
+    if (
+      !request.toolCall.toolCallId
+      || !request.toolCall.title
+      || request.toolCall.status !== 'pending'
+      || !request.options.length
+    ) return Promise.resolve({ outcome: { outcome: 'cancelled' } });
+    const current = this._pendingApproval;
+    if (current && !current.answered) {
+      return Promise.resolve({ outcome: { outcome: 'cancelled' } });
+    }
+    return new Promise<NativeACPPermissionResponse>((resolve) => {
+      const chatItemId = request.requestId;
+      this._pendingApproval = {
+        chatItemId,
+        answered: false,
+        native: { request, resolve },
+      };
+      this._status = 'waiting';
+      this._addChatItem({
+        type: 'approval_needed',
+        id: chatItemId,
+        tool: request.toolCall.title!,
+        arguments: this._asRecord(request.toolCall.rawInput),
+      });
+      this._onMessage?.();
+    });
+  }
+
+  private _nativePermissionOption(
+    request: NativeACPPermissionRequest,
+    approved: boolean,
+    scope: 'once' | 'session',
+    rejectionMode: ApprovalRejectMode,
+  ) {
+    const preferredId = approved
+      ? scope === 'session' ? 'allow_session' : 'allow_once'
+      : rejectionMode === 'reject_hard' ? 'reject_once' : rejectionMode;
+    const preferredKind = approved
+      ? scope === 'session' ? 'allow_always' : 'allow_once'
+      : rejectionMode === 'reject_hard' ? 'reject_once' : 'reject_once';
+    return request.options.find((option) => option.optionId === preferredId)
+      ?? request.options.find((option) => option.kind === preferredKind);
+  }
+
+  private _asRecord(value: unknown): Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+  }
+
+  private _handleNativeConnectionLoss(error?: Error): void {
+    this._native = null;
+    this._connectionState = 'disconnected';
+    this._permissionProfileState = null;
+    const connectionError = error ?? new Error('Native ACP connection closed');
+    if (this._pendingApproval?.native && !this._pendingApproval.answered) {
+      this._pendingApproval.answered = true;
+      this._pendingApproval.native.resolve({ outcome: { outcome: 'cancelled' } });
+    }
+    if (this._nativePrompt) {
+      this._status = 'idle';
+      this._error = connectionError;
+      this._nativePromptReject?.(connectionError);
+    }
+    this._onMessage?.();
+  }
+
+  private _showNativeOnboardGate(
+    selection: Extract<BrowserTransportSelection, { kind: 'native-acp' }>,
+  ): void {
+    const lastGate = [...this._chatItems].reverse().find(
+      (item) => item.type === 'onboard_required' || item.type === 'onboard_success',
+    );
+    if (lastGate?.type === 'onboard_required') return;
+    const onboard = selection.onboard!;
+    this._addChatItem({
+      type: 'onboard_required',
+      methods: [
+        ...(onboard.inviteCode ? ['invite_code'] : []),
+        ...(onboard.payment !== null ? ['payment'] : []),
+      ],
+      ...(onboard.payment !== null
+        ? { paymentAmount: onboard.payment, paymentAddress: this.address }
+        : {}),
+    });
+  }
+
+  private _waitForNativeAdmission(): Promise<ACPBrowserAdmission> {
+    if (this._nativeAdmission) {
+      const admission = this._nativeAdmission;
+      this._nativeAdmission = undefined;
+      return Promise.resolve(admission);
+    }
+    return new Promise<ACPBrowserAdmission>((resolve, reject) => {
+      this._nativeAdmissionWaiter = { resolve, reject };
+    });
+  }
+
+  private _rejectNativeAdmissionWaiter(error: Error): void {
+    const waiter = this._nativeAdmissionWaiter;
+    this._nativeAdmissionWaiter = null;
+    waiter?.reject(error);
+  }
+
+  private _closeNative(closeSession: boolean): void {
+    const connection = this._native;
+    if (!connection) return;
+    this._native = null;
+    const sessionId = this._currentSession?.acp_session_id;
+    if (
+      closeSession
+      && sessionId
+      && connection.agentCapabilities.sessionCapabilities?.close != null
+    ) {
+      void connection.closeSession({ sessionId })
+        .catch(() => {})
+        .finally(() => connection.close());
+    } else {
+      connection.close();
+    }
+    this._connectionState = 'disconnected';
+    this._permissionProfileState = null;
   }
 
   private _handleMessage(evt: { data: unknown }): void {
@@ -1361,8 +1986,8 @@ export class RemoteAgent {
   }
 
   private _hasReadyConnection(): boolean {
-    return this._authenticated
-      && this._isSocketOpen(this._ws);
+    return this._native !== null || (this._authenticated
+      && this._isSocketOpen(this._ws));
   }
 
   private _sendAuthenticated(message: Record<string, unknown>): void {

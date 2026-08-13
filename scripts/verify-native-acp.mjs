@@ -43,6 +43,7 @@ globalThis.fetch = async () => new Response(JSON.stringify({
 
 const address = await import('../dist/address-browser.js')
 const native = await import('@connectonion/react/experimental/native-acp')
+const root = await import('@connectonion/react')
 const keys = address.generateBrowser()
 const stream = await native.createAuthenticatedACPStream({
   agentAddress: `0x${'a'.repeat(64)}`,
@@ -70,6 +71,9 @@ if (opened[0].options?.headers !== undefined) {
 }
 if (opened[0].protocols?.[1] !== `connectonion.ticket.${ticket}`) {
   throw new Error('Native adapter did not bind the ticket to subprotocol negotiation')
+}
+if (typeof root.useAgentForHuman !== 'function') {
+  throw new Error('Conditional ESM root did not re-export the React API')
 }
 
 await stream.writable.abort()

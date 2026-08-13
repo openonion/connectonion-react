@@ -454,11 +454,15 @@ function decodeACPFrame(
   const params = record(message.params);
   const update = record(params?.update);
   if (!nonEmpty(params?.sessionId) || !update) return null;
-  const decoded = decodeACPUpdate(update as SessionUpdate);
+  const decoded = decodeNativeACPUpdate(update as SessionUpdate);
   return decoded ? { ...decoded, _acp_session_id: params.sessionId } : null;
 }
 
-function decodeACPUpdate(update: SessionUpdate): Record<string, unknown> | null {
+/** Decode a native official-SDK update into the existing ChatItem event shape. */
+export function decodeNativeACPUpdate(value: unknown): Record<string, unknown> | null {
+  const candidate = record(value);
+  if (!candidate || !nonEmpty(candidate.sessionUpdate)) return null;
+  const update = candidate as SessionUpdate;
   if (update.sessionUpdate === 'agent_message_chunk') {
     if (!nonEmpty(update.messageId)) return null;
     const content = record(update.content);
@@ -508,6 +512,26 @@ function decodeACPUpdate(update: SessionUpdate): Record<string, unknown> | null 
     result: toolResultText(update),
     timing_ms: timingMs(update._meta),
   };
+}
+
+/** Decode native mode state without treating unknown identifiers as authority. */
+export function normalizeNativeSessionModeState(
+  value: unknown,
+): HostSessionModeState | null {
+  const state = record(value);
+  const currentModeId = parsePermissionProfile(state?.currentModeId);
+  if (!currentModeId || !Array.isArray(state?.availableModes)) return null;
+  const availableModes: SessionMode[] = [];
+  const seen = new Set<PermissionProfile>();
+  for (const candidate of state.availableModes) {
+    const mode = record(candidate);
+    const id = parsePermissionProfile(mode?.id);
+    if (!id || seen.has(id) || !nonEmpty(mode?.name)) return null;
+    if (mode.description != null && typeof mode.description !== 'string') return null;
+    seen.add(id);
+    availableModes.push({ ...SESSION_MODES[id] });
+  }
+  return seen.has(currentModeId) ? { currentModeId, availableModes } : null;
 }
 
 function toolResultText(update: Extract<SessionUpdate, { sessionUpdate: 'tool_call_update' }>): string | undefined {
