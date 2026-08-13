@@ -64,6 +64,7 @@
   "homepage": "https://github.com/openonion/connectonion-react#readme",
   "dependencies": {
     "@agentclientprotocol/sdk": "1.2.1",
+    "@scure/bip39": "1.6.0",
     "tweetnacl": "^1.0.3",
     "ws": "^8.18.0",
     "zustand": "^5.0.0"

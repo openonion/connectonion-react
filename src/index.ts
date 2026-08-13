@@ -45,11 +45,24 @@ export {
   type VoiceInputStatus,
 } from './useVoiceInput';
 
-// Browser identity (Ed25519 keys for authentication)
+// Persistent browser identity (non-extractable Ed25519 key in IndexedDB)
+export {
+  initializeBrowserIdentity,
+  loadBrowserIdentity,
+  createBrowserIdentity,
+  importBrowserIdentity,
+  claimPendingBrowserRecovery,
+  BrowserIdentityUnavailableError,
+  BrowserIdentityCorruptError,
+  type BrowserIdentity,
+  type BrowserIdentityInitialization,
+  type BrowserRecoverySecret,
+  type MessageSigner,
+} from './browser-identity';
+
+// Explicit in-memory raw-key helpers. These functions never persist keys.
 export {
   generateBrowser,
-  saveBrowser,
-  loadBrowser,
   signBrowser,
   createSignedPayloadBrowser,
   type AddressData,

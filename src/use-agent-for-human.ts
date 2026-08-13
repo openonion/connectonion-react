@@ -153,8 +153,8 @@ export interface UseAgentForHumanReturn {
   /** Stop the current turn through negotiated ACP or one-shot legacy fallback. */
   interrupt: () => void;
 
-  /** Sign an onboard payload (requires private keys). Pass result to sendMessage(). */
-  signOnboard: (options: { inviteCode?: string; payment?: number }) => OutgoingMessage;
+  /** Sign an onboard payload asynchronously. Pass the resolved result to sendMessage(). */
+  signOnboard: (options: { inviteCode?: string; payment?: number }) => Promise<OutgoingMessage>;
 
   /**
    * @deprecated Use the two explicit setters. This compatibility method only

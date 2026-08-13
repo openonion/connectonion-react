@@ -6,10 +6,13 @@
  * downgrade or a duplicate protocol connection.
  */
 import {
-  signBrowser,
   type AddressData,
 } from '../address-browser';
-import { sortedStringify } from './auth';
+import {
+  signerFromKeys,
+  sortedStringify,
+  type MessageSigner,
+} from './auth';
 
 const AUTHORIZATION_BODY_LIMIT = 4096;
 const AUTHORIZATION_TIMEOUT_MS = 10000;
@@ -41,7 +44,10 @@ export interface AuthenticatedACPStreamOptions {
   readonly agentAddress: string;
   readonly httpUrl: string;
   readonly transport: ACPWebSocketTransport;
-  readonly keys: AddressData;
+  /** Preferred async-capable browser identity. */
+  readonly signer?: MessageSigner;
+  /** @deprecated Raw in-memory keys remain accepted for compatibility tests. */
+  readonly keys?: AddressData;
   readonly admission?: ACPBrowserAdmission;
 }
 
@@ -281,7 +287,8 @@ export async function authorizeAuthenticatedACP(
   if (!/^0x[0-9a-f]{64}$/.test(options.agentAddress)) {
     throw new Error('Native ACP requires a canonical Agent address');
   }
-  if (!/^0x[0-9a-f]{64}$/.test(options.keys.address)) {
+  const signer = options.signer ?? (options.keys ? signerFromKeys(options.keys, true) : null);
+  if (!signer || !/^0x[0-9a-f]{64}$/.test(signer.address)) {
     throw new Error('Native ACP requires a canonical caller address');
   }
   const transport = decodeACPTransport({ acp: options.transport });
@@ -312,7 +319,7 @@ export async function authorizeAuthenticatedACP(
     request_id: requestId,
     to: options.agentAddress,
   };
-  const signature = signBrowser(options.keys, sortedStringify(payload));
+  const signature = await signer.sign(sortedStringify(payload));
   const authorizeUrl = exactURL(options.httpUrl, transport.authorization.path);
   if (authorizeUrl.protocol === 'http:' && !isLoopback(authorizeUrl)) {
     throw new Error('Native ACP requires HTTPS outside loopback');
@@ -333,7 +340,7 @@ export async function authorizeAuthenticatedACP(
     signal: AbortSignal.timeout(AUTHORIZATION_TIMEOUT_MS),
     headers: {
       'content-type': 'application/json',
-      'x-co-from': options.keys.address,
+      'x-co-from': signer.address,
       'x-co-signature': signature,
       'x-co-timestamp': String(timestamp),
       'x-co-to': options.agentAddress,

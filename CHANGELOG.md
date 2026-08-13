@@ -2,7 +2,22 @@
 
 ## 0.4.2-alpha.3 — 2026-08-14
 
-Consumer-validated follow-up for Turbopack route-module isolation.
+Security and consumer follow-up for React-owned identity and Turbopack
+route-module isolation.
+
+### Security
+
+- Replace the default clear-text browser private-key record with a
+  non-extractable Ed25519 `CryptoKey` persisted through IndexedDB.
+- Migrate a validated legacy `localStorage['connectonion_keys']` identity to the
+  same address, deleting the old record only after the secure write signs and
+  verifies successfully.
+- Return recovery material only from the first create/migrate caller. Recovery
+  phrases and raw private keys are never persisted by the new API.
+- Restore the previous stored identity when an explicit create/import
+  replacement fails verification or legacy cleanup.
+- Route legacy WebSocket, native ACP ticket admission, onboarding, and
+  transcription through one async signer boundary.
 
 ### Fixed
 
@@ -12,6 +27,16 @@ Consumer-validated follow-up for Turbopack route-module isolation.
   across requests or trusting a foreign registry shape.
 - Preserve the bounded LRU, explicit drop/clear behavior, and a non-overwritable
   browser registry property.
+- Expose explicit ESM runtime exports for modern bundlers and use a browser-native
+  BIP39 implementation that does not require Node `Buffer`.
+
+### Compatibility
+
+- `generateBrowser`, `signBrowser`, and `createSignedPayloadBrowser` remain
+  explicit in-memory raw-key helpers. Unsafe synchronous `saveBrowser` and
+  `loadBrowser` exports are removed.
+- `signOnboard()` is asynchronous because a non-extractable WebCrypto key signs
+  through `SubtleCrypto`.
 
 ### Release boundary
 

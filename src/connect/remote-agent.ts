@@ -46,7 +46,7 @@ import {
 import {
   AgentInfoSource, getWebSocketCtor, generateUUID, normalizeRelayUrl, resolveEndpoint, toAgentInfo,
 } from './endpoint';
-import { ensureKeys, signPayload } from './auth';
+import { ensureSigner, signPayload, type MessageSigner } from './auth';
 import { mapEventToChatItem } from './chat-item-mapper';
 import {
   ACPBrowserAdmissionError,
@@ -136,6 +136,7 @@ export class RemoteAgent {
   readonly address: string;
 
   _keys?: address.AddressData;
+  _signer?: MessageSigner;
   _relayUrl: string;
   _directUrl?: string;
   _resolvedEndpoint?: ResolvedEndpoint;
@@ -217,6 +218,7 @@ export class RemoteAgent {
     this._directUrl = options.directUrl?.replace(/\/$/, '');
     this._WS = options.wsCtor || getWebSocketCtor();
     if (options.keys) this._keys = options.keys;
+    if (options.signer) this._signer = options.signer;
   }
 
   // --- Public getters ---
@@ -416,8 +418,12 @@ export class RemoteAgent {
     this._connectionState = 'reconnecting';
     this._onMessage?.();
 
-    this._keys = ensureKeys(this._keys);
+    this._signer = await ensureSigner(this._signer, this._keys);
     await this._resolveEndpointOnce();
+
+    const payload: Record<string, unknown> = { timestamp: Math.floor(Date.now() / 1000) };
+    payload.to = this.address;
+    const signed = await signPayload(this._signer, payload);
 
     const { wsUrl, isDirect } = this._resolveWsUrl();
     const ws = new this._WS(wsUrl);
@@ -439,9 +445,6 @@ export class RemoteAgent {
         this._startPingMonitor();
 
         // Send CONNECT with session_id + session data
-        const payload: Record<string, unknown> = { timestamp: Math.floor(Date.now() / 1000) };
-        payload.to = this.address;
-        const signed = signPayload(this._keys, payload);
         const msg: Record<string, unknown> = { type: 'CONNECT', session_id: sid, ...signed };
         if (!isDirect) msg.to = this.address;
         if (this._currentSession) msg.session = { ...this._currentSession };
@@ -877,11 +880,12 @@ export class RemoteAgent {
 
   resetConversation(): void { this.reset(); }
 
-  signOnboard(options: { inviteCode?: string; payment?: number }): Record<string, unknown> {
+  async signOnboard(options: { inviteCode?: string; payment?: number }): Promise<Record<string, unknown>> {
+    this._signer = await ensureSigner(this._signer, this._keys);
     const payload: Record<string, unknown> = { timestamp: Math.floor(Date.now() / 1000) };
     if (options.inviteCode) payload.invite_code = options.inviteCode;
     if (options.payment) payload.payment = options.payment;
-    return { type: 'ONBOARD_SUBMIT', ...signPayload(this._keys, payload) };
+    return { type: 'ONBOARD_SUBMIT', ...await signPayload(this._signer, payload) };
   }
 
   async checkSessionStatus(sessionId: string): Promise<RemoteSessionStatus> {
@@ -929,7 +933,6 @@ export class RemoteAgent {
     }
 
     // No active connection — open a short-lived WS just for the check
-    this._keys = ensureKeys(this._keys);
     await this._resolveEndpointOnce();
     const { wsUrl, isDirect } = this._resolveWsUrl();
 
@@ -1085,7 +1088,7 @@ export class RemoteAgent {
     if (this._native) return;
     const connectionEpoch = this._connectionEpoch;
     const resumeStatus = this._status === 'working' ? 'working' : 'idle';
-    this._keys = ensureKeys(this._keys);
+    this._signer = await ensureSigner(this._signer, this._keys);
     this._connectionState = this._currentSession?.acp_session_id
       ? 'reconnecting'
       : 'disconnected';
@@ -1101,7 +1104,7 @@ export class RemoteAgent {
           agentAddress: this.address,
           httpUrl: selection.httpUrl,
           transport: selection.transport,
-          keys: this._keys,
+          signer: this._signer,
           admission,
         }, {
           onSessionUpdate: (sessionId, update) => {
@@ -1195,7 +1198,7 @@ export class RemoteAgent {
     // false, so nothing can use it, and overwriting _ws below would leak it.
     if (this._ws && !this._hasReadyConnection()) this._closeWs();
 
-    this._keys = ensureKeys(this._keys);
+    this._signer = await ensureSigner(this._signer, this._keys);
     await this._resolveEndpointOnce();
 
     const { wsUrl, isDirect } = this._resolveWsUrl();
@@ -1221,7 +1224,7 @@ export class RemoteAgent {
     // Send CONNECT with session (conversation history)
     const payload: Record<string, unknown> = { timestamp: Math.floor(Date.now() / 1000) };
     payload.to = this.address;
-    const signed = signPayload(this._keys, payload);
+    const signed = await signPayload(this._signer, payload);
     const connectMsg: Record<string, unknown> = { type: 'CONNECT', ...signed };
     if (!isDirect) connectMsg.to = this.address;
     if (this._currentSession?.session_id) connectMsg.session_id = this._currentSession.session_id;

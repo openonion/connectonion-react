@@ -6,8 +6,10 @@
  *   Integration: exports Response, ChatItem (14-variant union), ChatItemType, AskUserField (structured ask_user forms, e.g. login credentials), WebSocketLike, WebSocketCtor, ResolvedEndpoint, AgentInfo, ConnectOptions, SessionState, ApprovalMode, AgentStatus, ConnectionState
  */
 import type * as address from '../address';
+import type { MessageSigner } from '../browser-identity';
 
 export type { AddressData } from '../address';
+export type { MessageSigner } from '../browser-identity';
 
 export interface Response {
   text: string;
@@ -103,7 +105,9 @@ export interface AgentOnboard {
 }
 
 export interface ConnectOptions {
-  /** Signing keys for authenticated requests */
+  /** Async-capable identity provider for authenticated requests. */
+  signer?: MessageSigner;
+  /** @deprecated Prefer signer; raw keys remain supported for compatibility. */
   keys?: address.AddressData;
   /** Relay URL for WebSocket connection (default: wss://oo.openonion.ai) */
   relayUrl?: string;
