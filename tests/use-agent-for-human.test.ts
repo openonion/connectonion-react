@@ -602,6 +602,41 @@ describe('useAgentForHuman hook', () => {
   });
 
   describe('error handling', () => {
+    it('exposes connection loss and clears it after reconnect', async () => {
+      class DropDuringInputWS extends MockWebSocket {
+        override send(data: unknown): void {
+          const msg = JSON.parse(String(data));
+          if (msg.type === 'CONNECT') {
+            super.send(data);
+            return;
+          }
+          if (msg.type === 'INPUT') setTimeout(() => this.close(), 0);
+        }
+      }
+
+      ActiveWS = DropDuringInputWS;
+      const addr = uniqueAddr();
+      const { result } = renderHook(() =>
+        useAgentForHuman(addr, 'drop-during-input-session')
+      );
+
+      await act(async () => {
+        result.current.input('Hello');
+        await flush();
+      });
+
+      expect(result.current.connectionState).toBe('disconnected');
+      expect(result.current.error?.message).toBe('Connection closed before response');
+
+      await act(async () => {
+        result.current.reconnect();
+        await flush();
+      });
+
+      expect(result.current.connectionState).toBe('connected');
+      expect(result.current.error).toBeNull();
+    });
+
     it('sets error state on agent error', async () => {
       class ErrorWS extends MockWebSocket {
         override send(data: unknown): void {

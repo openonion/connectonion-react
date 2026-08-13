@@ -1253,8 +1253,9 @@ export class RemoteAgent {
     }
     if (connected.server_newer && connected.chat_items && Array.isArray(connected.chat_items)) {
       this._mergeServerChatItems(connected.chat_items as ChatItem[]);
-      this._onMessage?.();
     }
+    this._error = null;
+    this._onMessage?.();
   }
 
   private async _promptNative(
@@ -1637,6 +1638,7 @@ export class RemoteAgent {
       }
       this._authenticated = true;
       this._connectionState = 'connected';
+      this._error = null;
       this._settleReconnectReady();
       // An idle/new session has no output left to wait for. Hosts in the rollout
       // have used both "connected" and "idle" for that same state.

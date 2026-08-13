@@ -283,7 +283,7 @@ export function useAgentForHuman(
       setProfile(agent.profile);
       setAvailablePermissionProfiles([...agent.availablePermissionProfiles]);
       setPermissionProfileChangePending(agent.permissionProfileChangePending);
-      if (agent.error) setError(agent.error);
+      setError(agent.error);
       if (agent.currentSession) {
         setSession(agent.currentSession);
         if (agent.currentSession.messages) {
