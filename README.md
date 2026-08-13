@@ -43,7 +43,8 @@ function Chat({ address, sessionId }: { address: string; sessionId: string }) {
 | `fetchAgentInfo(address)` | one-shot public agent info |
 | `connect(address, options?)` from `@connectonion/react/connect` | low-level connection API |
 | `createAuthenticatedACPStream(options)` from `@connectonion/react/experimental/native-acp` | low-level ESM-only native ACP admission + official WebSocket stream used by the package root |
-| `generateBrowser` / `saveBrowser` / `loadBrowser` / `signBrowser` / `createSignedPayloadBrowser` | Ed25519 browser identity |
+| `initializeBrowserIdentity` / `createBrowserIdentity` / `importBrowserIdentity` / `claimPendingBrowserRecovery` | Persistent Ed25519 browser identity with a non-extractable WebCrypto private key |
+| `generateBrowser` / `signBrowser` / `createSignedPayloadBrowser` | Explicit in-memory raw-key helpers; they never persist keys |
 | types | `ChatItem`, `AgentInfo`, `SkillInfo`, `CollaborationMode`, `PermissionProfile`, `Message`, `Response`, … |
 
 The package root's ESM `import` condition registers the official ACP SDK driver.
@@ -60,6 +61,43 @@ without transcript replay. Text, supported raster images, and embedded files map
 ACP content blocks. Onboarding pauses the original connection/input and resumes that exact
 attempt after a verified invite or payment; it never asks the UI to resend the prompt. Agent
 and thought chunks accumulate by stable ACP message ID.
+
+## Browser identity
+
+The React package owns browser identity. On first use it creates a BIP39 recovery
+phrase, imports the derived Ed25519 key as a non-extractable WebCrypto
+`CryptoKey`, and persists that key through IndexedDB. The phrase is returned to
+the first caller once and is not stored.
+
+```ts
+import { initializeBrowserIdentity } from '@connectonion/react'
+
+const { identity, recovery } = await initializeBrowserIdentity()
+console.log(identity.address)
+if (recovery) showRecoveryOnce(recovery.value)
+```
+
+If a default connection won the initialization race, call
+`claimPendingBrowserRecovery()` once; it returns the in-memory recovery value and
+clears it. It never reads recovery material from persistent storage.
+
+An existing `localStorage['connectonion_keys']` record is validated, migrated to
+the same address, verified by signing a probe, and only then removed. If the
+write or verification fails, the legacy record remains available for recovery.
+There is no clear-text fallback when WebCrypto, Ed25519, or IndexedDB is
+unavailable.
+
+Explicit create/import replacements restore the previous stored identity if
+verification or legacy cleanup fails. Callers only receive a replacement after
+the complete operation succeeds.
+
+Non-extractable storage prevents ordinary storage export from yielding the raw
+private key. It does not make a compromised origin safe: injected same-origin
+JavaScript could still request signatures while it is running. Keep CSP,
+dependency review, and origin isolation as separate defenses.
+
+The complete rationale and rejected alternatives are recorded in
+[`docs/browser-identity.md`](docs/browser-identity.md).
 
 ## Codex-style collaboration and permissions
 

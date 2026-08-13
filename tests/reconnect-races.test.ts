@@ -41,9 +41,17 @@ function remoteAgent() {
       publicKey: new Uint8Array(32),
       privateKey: new Uint8Array(64),
     },
+    signer: {
+      address: `0x${'a'.repeat(64)}`,
+      sign: () => 'signature',
+    },
   }) as any;
   agent._currentSession = { session_id: SESSION_ID };
   return agent;
+}
+
+async function settleSigner(): Promise<void> {
+  for (let i = 0; i < 6; i += 1) await Promise.resolve();
 }
 
 describe('RemoteAgent reconnect races', () => {
@@ -69,8 +77,7 @@ describe('RemoteAgent reconnect races', () => {
     agent._ensureConnected = jest.fn().mockResolvedValue(undefined);
 
     const checking = agent.checkSessionStatus(SESSION_ID);
-    await Promise.resolve();
-    await Promise.resolve();
+    await settleSigner();
 
     const statusSocket = FakeSocket.instances[0] as any;
     statusSocket.readyState = 1;
@@ -135,8 +142,7 @@ describe('RemoteAgent reconnect races', () => {
     const connecting = agent.connect().catch(() => undefined);
     const reconnecting = agent.reconnect(SESSION_ID).catch(() => undefined);
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await settleSigner();
     expect(FakeSocket.instances).toHaveLength(1);
 
     agent.reset();
@@ -150,8 +156,7 @@ describe('RemoteAgent reconnect races', () => {
     const reconnecting = agent.reconnect(SESSION_ID).catch(() => undefined);
     const connecting = agent.connect().catch(() => undefined);
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await settleSigner();
     expect(FakeSocket.instances).toHaveLength(1);
 
     agent.reset();
@@ -166,8 +171,7 @@ describe('RemoteAgent reconnect races', () => {
     const second = agent.reconnect(SESSION_ID).catch(() => undefined);
 
     expect(agent.connectionState).toBe('reconnecting');
-    await Promise.resolve();
-    await Promise.resolve();
+    await settleSigner();
     expect(FakeSocket.instances).toHaveLength(1);
 
     agent.reset();
@@ -178,8 +182,7 @@ describe('RemoteAgent reconnect races', () => {
   test('an idle CONNECTED frame completes reconnect readiness', async () => {
     const agent = remoteAgent();
     const reconnecting = agent.reconnect(SESSION_ID);
-    await Promise.resolve();
-    await Promise.resolve();
+    await settleSigner();
     const socket = FakeSocket.instances[0] as any;
     socket.readyState = 1;
     socket.onopen?.({});
@@ -242,8 +245,7 @@ describe('RemoteAgent reconnect races', () => {
     agent._authenticated = true;
 
     const connecting = agent.connect().catch(() => undefined);
-    await Promise.resolve();
-    await Promise.resolve();
+    await settleSigner();
 
     expect(stale.closeCalls).toBe(1);
     expect(FakeSocket.instances).toHaveLength(2);

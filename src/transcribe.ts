@@ -1,13 +1,18 @@
 /**
  * @purpose Audio transcription using LLM API with Ed25519 authentication
  * @llm-note
- *   Dependencies: imports from [./address-browser] | imported by [src/index.ts, src/react/useVoiceInput.ts]
+ *   Dependencies: imports from [./browser-identity, ./address-browser] | imported by [src/index.ts, src/useVoiceInput.ts]
  *   Data flow: receives audioBlob: Blob → converts to wav → base64 → calls OpenOnion API → returns transcribed text
- *   State/Effects: makes API request | uses browser keys from localStorage
+ *   State/Effects: makes API request | signs with the React-owned browser identity
  *   Integration: exposes transcribe(audioBlob, options?) | uses Ed25519 auth (same as agent connection)
  */
 
-import { loadBrowser, signBrowser, type AddressData } from './address-browser';
+import { signBrowser, type AddressData } from './address-browser';
+import {
+  initializeBrowserIdentity,
+  retainPendingBrowserRecovery,
+  type MessageSigner,
+} from './browser-identity';
 
 export interface TranscribeOptions {
   /** Context hints for better accuracy (e.g., "Technical AI discussion. Names: Aaron, Lisa") */
@@ -18,7 +23,9 @@ export interface TranscribeOptions {
   timestamps?: boolean
   /** API key for authentication (if not using Ed25519 signed auth) */
   apiKey?: string
-  /** Explicit address data for Ed25519 auth (optional - will load from localStorage if not provided) */
+  /** Async-capable identity for Ed25519 auth. Defaults to the secure browser identity. */
+  signer?: MessageSigner
+  /** @deprecated Prefer signer; raw address data remains supported in memory. */
   addressData?: AddressData
   /** Base URL for API (default: https://oo.openonion.ai). Use proxy URL to avoid CORS issues in browser. */
   baseUrl?: string
@@ -119,7 +126,7 @@ function canonicalJSON(obj: Record<string, unknown>): string {
  *
  * @example
  * ```typescript
- * // Simple transcription (uses keys from localStorage)
+ * // Simple transcription (uses the secure browser identity)
  * const text = await transcribe(audioBlob)
  *
  * // With context hints
@@ -140,14 +147,25 @@ export async function transcribe(
     model = 'co/gemini-2.5-flash',
     timestamps = false,
     apiKey,
+    signer: providedSigner,
     addressData: providedAddressData,
     baseUrl: providedBaseUrl
   } = options
 
-  // Get auth from apiKey or Ed25519 keys
-  const addressData = providedAddressData || loadBrowser();
-  if (!apiKey && !addressData) {
-    throw new Error('No authentication found. Please set OPENONION_API_KEY in settings or connect to an agent first.')
+  let signer: MessageSigner | undefined;
+  if (!apiKey) {
+    signer = providedSigner;
+    if (!signer && providedAddressData) {
+      signer = {
+        address: providedAddressData.address,
+        sign: (message: string) => signBrowser(providedAddressData, message),
+      };
+    }
+    if (!signer) {
+      const initialized = await initializeBrowserIdentity();
+      if (initialized.recovery) retainPendingBrowserRecovery(initialized.recovery);
+      signer = initialized.identity;
+    }
   }
 
   // Convert to wav if needed (webm/ogg not supported by OpenAI/Gemini)
@@ -190,7 +208,7 @@ export async function transcribe(
 
   if (apiKey) {
     headers['Authorization'] = `Bearer ${apiKey}`;
-  } else if (addressData) {
+  } else if (signer) {
     const timestamp = Math.floor(Date.now() / 1000);
     const payload = {
       action: 'transcribe',
@@ -198,9 +216,9 @@ export async function transcribe(
       timestamp,
     };
     const canonicalMessage = canonicalJSON(payload);
-    const signature = signBrowser(addressData, canonicalMessage);
+    const signature = await signer.sign(canonicalMessage);
     headers['X-Signature'] = signature;
-    headers['X-From'] = addressData.address;
+    headers['X-From'] = signer.address;
     headers['X-Timestamp'] = timestamp.toString();
   }
 

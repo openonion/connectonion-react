@@ -3,15 +3,14 @@
  * @llm-note
  *   Dependencies: imports from [crypto, fs, path (Node.js built-ins, conditional)] | imported by [src/connect/remote-agent.ts, src/index.ts, tests/connect.test.ts, tests/address.test.ts, tests/e2e/signedAgent.test.ts] | tested by [tests/address.test.ts]
  *   Data flow: generate() → creates Ed25519 keypair → exports to raw buffers → returns AddressData{address: 0x..., publicKey, privateKey} | sign(addressData, message) → recreates privateKey from buffer → signs with crypto.sign() → returns hex signature | verify(address, message, signature) → recreates publicKey from address → verifies with crypto.verify() → returns boolean
- *   State/Effects: reads/writes .co/keys/agent.key (Node.js) | reads/writes localStorage connectonion_keys (browser) | conditional require() for Node.js modules | detects environment via globalThis.window check
- *   Integration: exposes generate(), load(coDir), save(), sign(addressData, message), verify(address, message, signature), createSignedPayload(addressData, prompt, toAddress), AddressData type | browser variants: generateBrowser(), loadBrowser(), saveBrowser(), signBrowser() | canonical JSON with sorted keys for consistent signatures
- *   Performance: Ed25519 keypair generation (crypto.generateKeyPairSync) | PKCS#8/SPKI DER encoding for key export | synchronous fs operations | localStorage for browser persistence
+ *   State/Effects: reads .co/keys/agent.key (Node.js) | conditional require() for Node.js modules
+ *   Integration: exposes Node identity helpers and re-exports ephemeral browser generation/signing; persistent browser identity is owned by browser-identity.ts
+ *   Performance: Ed25519 keypair generation (crypto.generateKeyPairSync) | PKCS#8/SPKI DER encoding for key export
  *   Errors: throws if generate() called in browser (requires Node.js crypto) | throws if sign()/verify() called in browser (use signBrowser/verifyBrowser) | returns null if load() finds no keys | returns false on verify() failure
  *
  * Architecture:
  *   - Node.js: crypto module for Ed25519, fs for .co/keys/agent.key persistence
- *   - Browser: tweetnacl for Ed25519, localStorage for key persistence
- *   - Dual exports: regular functions (Node.js) and *Browser functions (browser)
+ *   - Browser: tweetnacl raw helpers are ephemeral; WebCrypto + IndexedDB own persistence
  *   - Canonical JSON: sorted keys for consistent signature verification
  */
 
@@ -36,30 +35,11 @@ export interface AddressData {
   privateKey: Buffer | Uint8Array;
 }
 
-/**
- * Check if running in browser environment.
- */
-function isBrowser(): boolean {
-  return typeof globalThis !== 'undefined' &&
-    typeof (globalThis as { window?: unknown }).window !== 'undefined' &&
-    typeof (globalThis as { localStorage?: unknown }).localStorage !== 'undefined';
-}
-
-// Minimal browser interfaces for Node.js compilation
-interface BrowserStorage {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
-}
-
-/**
- * Get localStorage safely (browser only).
- */
-function getLocalStorage(): BrowserStorage | null {
-  if (isBrowser()) {
-    return (globalThis as unknown as { localStorage: BrowserStorage }).localStorage;
-  }
-  return null;
-}
+export {
+  generateBrowser,
+  signBrowser,
+  createSignedPayloadBrowser,
+} from './address-browser';
 
 
 /**
@@ -141,126 +121,6 @@ export function load(coDir: string = '.co'): AddressData | null {
   } catch {
     return null;
   }
-}
-
-/**
- * Save keys to browser localStorage.
- */
-export function saveBrowser(keys: AddressData): void {
-  const storage = getLocalStorage();
-  if (!storage) {
-    throw new Error('saveBrowser() requires browser environment');
-  }
-
-  // Convert Uint8Array to hex string (browser-safe, no Buffer dependency)
-  const data = {
-    address: keys.address,
-    shortAddress: keys.shortAddress,
-    publicKey: Array.from(keys.publicKey).map(b => b.toString(16).padStart(2, '0')).join(''),
-    privateKey: Array.from(keys.privateKey).map(b => b.toString(16).padStart(2, '0')).join(''),
-  };
-
-  storage.setItem('connectonion_keys', JSON.stringify(data));
-}
-
-/**
- * Load keys from browser localStorage.
- */
-export function loadBrowser(): AddressData | null {
-  const storage = getLocalStorage();
-  if (!storage) {
-    return null;
-  }
-
-  const stored = storage.getItem('connectonion_keys');
-  if (!stored) {
-    return null;
-  }
-
-  try {
-    const data = JSON.parse(stored) as {
-      address: string;
-      shortAddress: string;
-      publicKey: string;
-      privateKey: string;
-    };
-
-    // Convert hex strings to Uint8Array (browser-safe, no Buffer dependency)
-    const publicKey = new Uint8Array(data.publicKey.match(/.{2}/g)!.map(b => parseInt(b, 16)));
-    const privateKey = new Uint8Array(data.privateKey.match(/.{2}/g)!.map(b => parseInt(b, 16)));
-
-    return {
-      address: data.address,
-      shortAddress: data.shortAddress,
-      publicKey,
-      privateKey,
-    };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Generate keys in browser using tweetnacl Ed25519.
- */
-export function generateBrowser(): AddressData {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const nacl = require('tweetnacl');
-
-  // Generate Ed25519 key pair
-  const keyPair = nacl.sign.keyPair();
-
-  const address = '0x' + Array.from(keyPair.publicKey as Uint8Array).map(b => (b as number).toString(16).padStart(2, '0')).join('');
-  const shortAddress = `${address.slice(0, 6)}...${address.slice(-4)}`;
-
-  return {
-    address,
-    shortAddress,
-    publicKey: keyPair.publicKey,
-    privateKey: keyPair.secretKey,  // 64 bytes: seed + public key
-  };
-}
-
-/**
- * Sign a message in browser using tweetnacl.
- */
-export function signBrowser(addressData: AddressData, message: string): string {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const nacl = require('tweetnacl');
-
-  const msgBytes = new TextEncoder().encode(message);
-  const signature = nacl.sign.detached(msgBytes, addressData.privateKey);
-
-  return Array.from(signature as Uint8Array).map(b => (b as number).toString(16).padStart(2, '0')).join('');
-}
-
-/**
- * Create a signed request payload for browser.
- */
-export function createSignedPayloadBrowser(
-  addressData: AddressData,
-  prompt: string,
-  toAddress: string
-): {
-  payload: { prompt: string; to: string; timestamp: number };
-  from: string;
-  signature: string;
-} {
-  const timestamp = Math.floor(Date.now() / 1000);
-  const payload = {
-    prompt,
-    to: toAddress,
-    timestamp,
-  };
-
-  const canonicalMessage = canonicalJSON(payload);
-  const signature = signBrowser(addressData, canonicalMessage);
-
-  return {
-    payload,
-    from: addressData.address,
-    signature,
-  };
 }
 
 /**

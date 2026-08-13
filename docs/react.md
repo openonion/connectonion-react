@@ -439,20 +439,75 @@ function Chat({ sessionId }: { sessionId: string }) {
 }
 ```
 
-### With Signing Keys (Low-Level API)
+### With a secure browser identity (Low-Level API)
 
 ```tsx
-import { generateBrowser } from '@connectonion/react';
+import { initializeBrowserIdentity } from '@connectonion/react';
 import { connect } from '@connectonion/react/connect';
 
-const keys = generateBrowser();
-const agent = connect('0x123abc', { keys });
+const { identity, recovery } = await initializeBrowserIdentity();
+if (recovery) showRecoveryOnce(recovery.value);
+const agent = connect('0x123abc', { signer: identity });
 const response = await agent.input('Hello');
 ```
 
 `useAgentForHuman` owns the normal browser connection for React applications and accepts
 only `address` and `sessionId`. Use the low-level `connect()` API when you need custom
-connection options such as explicit signing keys or a direct URL.
+connection options such as an explicit signer or a direct URL.
+
+## Browser identity and recovery
+
+Browser identity belongs to `@connectonion/react`, not to the application UI or
+the retired standalone TypeScript SDK. The default connection, native ACP
+admission, onboarding, and transcription all use the same async signer.
+
+```tsx
+import {
+  initializeBrowserIdentity,
+  createBrowserIdentity,
+  importBrowserIdentity,
+  claimPendingBrowserRecovery,
+} from '@connectonion/react'
+
+// Load, securely migrate, or create the one browser identity.
+const initialized = await initializeBrowserIdentity()
+const recovery = initialized.recovery ?? claimPendingBrowserRecovery()
+
+// Explicit replacement: returns a new phrase once.
+const replacement = await createBrowserIdentity()
+
+// Recovery import accepts a valid BIP39 phrase or legacy private-key hex.
+const recovered = await importBrowserIdentity(words)
+```
+
+The private Ed25519 key is a non-extractable WebCrypto `CryptoKey` stored via
+IndexedDB structured clone. Only public address metadata sits beside it. A new
+or migrated recovery value is returned to one caller and never persisted; after
+the user dismisses it, the SDK cannot reveal it again.
+
+Legacy `localStorage['connectonion_keys']` data is validated for matching
+address/public/private fields, written to IndexedDB, reloaded, and proved by a
+signature before deletion. A failed write, corrupt record, or conflicting
+identity fails closed without generating a replacement address. Browsers that
+lack WebCrypto Ed25519 or IndexedDB receive an actionable error; the SDK never
+falls back to clear-text persistence.
+
+Explicit create/import replacements also fail closed: the SDK restores the
+previous stored identity if candidate verification or legacy cleanup fails, and
+never returns a replacement until the complete operation succeeds.
+
+This protects raw key material at rest and from bulk Web Storage exfiltration.
+It cannot stop injected same-origin JavaScript from asking the non-extractable
+key to sign while the origin is compromised. CSP, trusted dependencies, and
+isolated untrusted content remain required defenses.
+
+`generateBrowser()`, `signBrowser()`, and
+`createSignedPayloadBrowser()` remain for explicit ephemeral/raw-key use. They
+do not persist anything. The old synchronous `saveBrowser()` and
+`loadBrowser()` APIs are removed.
+
+See [Browser identity: non-extractable WebCrypto keys](./browser-identity.md) for
+the threat model, alternatives, migration invariants, and revisit conditions.
 
 ### Tool Execution Visualization
 
