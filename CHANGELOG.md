@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.4.2-alpha.0 — 2026-08-13
+
+Alpha preview of the React-owned authenticated native ACP browser lifecycle.
+
+### Added
+
+- Exact, non-cacheable `/info` transport discovery followed by signed browser
+  ticket admission and the official ACP SDK WebSocket transport.
+- ACP initialize, session create/resume/close, prompt streaming, permission,
+  cancellation, and acknowledged permission-mode transactions.
+- Browser-safe native session persistence with virtual `cwd: "/"`, no Host
+  paths, and `mcpServers: []`.
+- Text, image, and embedded-file prompt conversion based on negotiated Agent
+  capabilities.
+- Invite/payment onboarding that pauses and resumes the original prompt once,
+  plus stable message/thought chunk accumulation.
+
+### Security and compatibility
+
+- Native ACP is selected only from the exact supported discovery descriptor.
+  Admission, TLS, Origin, initialize, session, and prompt failures fail closed
+  and never open the legacy transport.
+- Only a non-cacheable JSON `403 forbidden:` response can enter the retryable
+  onboarding gate. Tickets, connection IDs, session IDs, and ACP metadata never
+  grant authority.
+- Modern ESM imports register native ACP. Existing CommonJS `require()`
+  consumers retain the bounded legacy compatibility path. Exact descriptor
+  absence remains the direct legacy signal during this preview.
+- Publish this version under the npm `alpha` dist-tag; stable `latest` remains
+  `0.4.1`. O Chat should pin `0.4.2-alpha.0` exactly while validating it.
+- Rollback changes only the consumer dependency back to `0.4.1`; the retired
+  standalone TypeScript SDK is not part of either path.
+
 ## 0.4.1 — 2026-08-12
 
 - Separate Codex-aligned `default` / `plan` collaboration modes from Host

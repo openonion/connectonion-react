@@ -61,4 +61,8 @@ jobs:
           node --input-type=module -e "await import('@connectonion/react/experimental/native-acp')"
 
       - name: Publish to npm
-        run: npm publish --provenance --access public
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          NPM_TAG=$(node -p "require('./package.json').version.split('-')[1]?.split('.')[0] || 'latest'")
+          echo "Publishing $PKG_VERSION with npm dist-tag $NPM_TAG"
+          npm publish --provenance --access public --tag "$NPM_TAG"
