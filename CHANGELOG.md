@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.2-alpha.1 — 2026-08-13
+
+Follow-up preview that completes the native ACP permission-tool lifecycle.
+
+### Fixed
+
+- Track every permission tool created during one prompt, so sequential approval
+  requests cannot leave an earlier card permanently `running`.
+- Preserve an official Host terminal tool update; otherwise fail each unresolved
+  permission tool closed at successful, cancelled, and failed prompt boundaries.
+
+### Release boundary
+
+- Publish under the npm `alpha` dist-tag; stable `latest` remains `0.4.1`.
+- O Chat should pin `0.4.2-alpha.1` exactly after publication.
+- Rollback remains an exact dependency change to `0.4.1`; the retired standalone
+  TypeScript SDK remains outside the browser path.
+
 ## 0.4.2-alpha.0 — 2026-08-13
 
 Alpha preview of the React-owned authenticated native ACP browser lifecycle.
@@ -24,9 +42,8 @@ Alpha preview of the React-owned authenticated native ACP browser lifecycle.
 - Create or reuse the stable running tool card when native ACP sends a
   permission request before its tool update, keeping O Chat's inline approval
   controls visible without adding protocol logic to the product UI.
-- Fail every unresolved permission tool card at the prompt boundary instead of
-  claiming success or leaving the consumer UI permanently running, including
-  prompts that request permission more than once.
+- Fail an unresolved permission tool card at the prompt boundary instead of
+  claiming success or leaving the consumer UI permanently running.
 
 ### Security and compatibility
 
