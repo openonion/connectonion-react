@@ -1296,6 +1296,7 @@ export class RemoteAgent {
           throw new Error('Connection reset');
         }
         this._clearPlaceholder();
+        this._failUnsettledNativePermissionTool();
         this._pendingApproval = null;
         this._status = 'idle';
         this._onMessage?.();
@@ -1309,6 +1310,7 @@ export class RemoteAgent {
         if (connectionEpoch !== this._connectionEpoch) throw error;
         this._error = error;
         this._clearPlaceholder();
+        this._failUnsettledNativePermissionTool();
         this._pendingApproval = null;
         this._status = 'idle';
         this._onMessage?.();
@@ -1430,23 +1432,42 @@ export class RemoteAgent {
       || request.toolCall.status !== 'pending'
       || !request.options.length
     ) return Promise.resolve({ outcome: { outcome: 'cancelled' } });
+    const toolCallId = request.toolCall.toolCallId;
+    const existingItem = this._chatItems.find((item) => item.id === toolCallId);
+    if (
+      existingItem
+      && (existingItem.type !== 'tool_call' || existingItem.status !== 'running')
+    ) return Promise.resolve({ outcome: { outcome: 'cancelled' } });
     const current = this._pendingApproval;
     if (current && !current.answered) {
       return Promise.resolve({ outcome: { outcome: 'cancelled' } });
     }
     return new Promise<NativeACPPermissionResponse>((resolve) => {
       const chatItemId = request.requestId;
+      const arguments_ = this._asRecord(request.toolCall.rawInput);
       this._pendingApproval = {
         chatItemId,
         answered: false,
         native: { request, resolve },
       };
       this._status = 'waiting';
+      if (existingItem?.type === 'tool_call') {
+        existingItem.name = request.toolCall.title!;
+        if (request.toolCall.rawInput !== undefined) existingItem.args = arguments_;
+      } else {
+        this._addChatItem({
+          type: 'tool_call',
+          id: toolCallId,
+          name: request.toolCall.title!,
+          args: arguments_,
+          status: 'running',
+        });
+      }
       this._addChatItem({
         type: 'approval_needed',
         id: chatItemId,
         tool: request.toolCall.title!,
-        arguments: this._asRecord(request.toolCall.rawInput),
+        arguments: arguments_,
       });
       this._onMessage?.();
     });
@@ -1466,6 +1487,18 @@ export class RemoteAgent {
       : rejectionMode === 'reject_hard' ? 'reject_once' : 'reject_once';
     return request.options.find((option) => option.optionId === preferredId)
       ?? request.options.find((option) => option.kind === preferredKind);
+  }
+
+  private _failUnsettledNativePermissionTool(): void {
+    const toolCallId = this._pendingApproval?.native?.request.toolCall.toolCallId;
+    if (!toolCallId) return;
+    const item = this._chatItems.find(
+      (candidate) => candidate.type === 'tool_call' && candidate.id === toolCallId,
+    );
+    // The prompt has ended, so `running` is no longer truthful. Without an
+    // official terminal tool update, fail closed instead of manufacturing a
+    // successful side effect or leaving restored UIs permanently active.
+    if (item?.type === 'tool_call' && item.status === 'running') item.status = 'error';
   }
 
   private _asRecord(value: unknown): Record<string, unknown> {
