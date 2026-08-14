@@ -1758,7 +1758,7 @@ export class RemoteAgent {
     // Stream events → ChatItem mapping
     if (data?.type === 'llm_call' || data?.type === 'llm_result' ||
         data?.type === 'tool_call' || data?.type === 'tool_result' ||
-        data?.type === 'tool_call_update' || data?.type === 'ACP_NOTIFICATION' ||
+        data?.type === 'tool_call_update' || data?.type === 'provider_invocation' || data?.type === 'ACP_NOTIFICATION' ||
         data?.type === 'thinking' || data?.type === 'assistant' ||
         data?.type === 'agent_image' ||
         data?.type === 'intent' || data?.type === 'eval' || data?.type === 'compact' ||
