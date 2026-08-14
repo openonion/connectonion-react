@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.4.2-alpha.3 — 2026-08-14
+
+Security and consumer follow-up for React-owned identity and Turbopack
+route-module isolation.
 
 ### Security
 
@@ -11,10 +14,21 @@
   verifies successfully.
 - Return recovery material only from the first create/migrate caller. Recovery
   phrases and raw private keys are never persisted by the new API.
-- Route legacy WebSocket, native ACP ticket admission, onboarding, and
-  transcription through one async signer boundary.
 - Restore the previous stored identity when an explicit create/import
   replacement fails verification or legacy cleanup.
+- Route legacy WebSocket, native ACP ticket admission, onboarding, and
+  transcription through one async signer boundary.
+
+### Fixed
+
+- Share one versioned live-agent registry across browser module evaluations, so
+  landing and session routes reuse the same warmed agent and native ACP session.
+- Keep SSR and incompatible global values module-local instead of sharing state
+  across requests or trusting a foreign registry shape.
+- Preserve the bounded LRU, explicit drop/clear behavior, and a non-overwritable
+  browser registry property.
+- Expose explicit ESM runtime exports for modern bundlers and use a browser-native
+  BIP39 implementation that does not require Node `Buffer`.
 
 ### Compatibility
 
@@ -23,6 +37,14 @@
   `loadBrowser` exports are removed.
 - `signOnboard()` is asynchronous because a non-extractable WebCrypto key signs
   through `SubtleCrypto`.
+
+### Release boundary
+
+- Publish under the npm `alpha` dist-tag; stable `latest` remains `0.4.1`.
+- O Chat should pin `0.4.2-alpha.3` exactly and validate both Turbopack development
+  and production builds before release.
+- Rollback remains an exact dependency change to `0.4.2-alpha.2` or stable
+  `0.4.1`; the retired standalone TypeScript SDK remains outside the browser path.
 
 ## 0.4.2-alpha.2 — 2026-08-13
 
