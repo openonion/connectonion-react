@@ -16,7 +16,33 @@ export interface Response {
   done: boolean;
 }
 
-export type ChatItemType = 'user' | 'agent' | 'thinking' | 'tool_call' | 'ask_user' | 'approval_needed' | 'onboard_required' | 'onboard_success' | 'intent' | 'eval' | 'compact' | 'tool_blocked' | 'full_access_checkpoint' | 'plan_review' | 'files_received';
+export type ProviderInvocationStatus = 'starting' | 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled';
+
+export interface ProviderActivity {
+  id: string;
+  name: string;
+  args?: Record<string, unknown>;
+  status: 'running' | 'done' | 'error';
+  result?: string;
+}
+
+export interface ProviderInvocationItem {
+  id: string;
+  type: 'provider_invocation';
+  parentToolCallId: string;
+  provider: 'codex' | 'claude_code';
+  providerDisplayName: string;
+  taskSummary?: string;
+  permissionMode?: 'manual' | 'auto_approve' | 'full_access';
+  status: ProviderInvocationStatus;
+  activities: ProviderActivity[];
+  sessionId?: string;
+  elapsedMs?: number;
+  result?: string;
+  error?: string;
+}
+
+export type ChatItemType = 'user' | 'agent' | 'thinking' | 'tool_call' | 'provider_invocation' | 'ask_user' | 'approval_needed' | 'onboard_required' | 'onboard_success' | 'intent' | 'eval' | 'compact' | 'tool_blocked' | 'full_access_checkpoint' | 'plan_review' | 'files_received';
 
 export interface AskUserField {
   name: string;
@@ -32,6 +58,7 @@ export type ChatItem =
   | { id: string; type: 'agent'; content: string; images?: string[] }
   | { id: string; type: 'thinking'; status: 'running' | 'done' | 'error'; model?: string; duration_ms?: number; content?: string; kind?: string; context_percent?: number; usage?: { input_tokens?: number; output_tokens?: number; prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; cost?: number } }
   | { id: string; type: 'tool_call'; name: string; args?: Record<string, unknown>; status: 'running' | 'done' | 'error'; result?: string; timing_ms?: number }
+  | ProviderInvocationItem
   | { id: string; type: 'ask_user'; text: string; options: string[]; multi_select: boolean; input_type?: string; fields?: AskUserField[]; answered?: boolean; answer?: string }
   | { id: string; type: 'approval_needed'; tool: string; arguments: Record<string, unknown>; description?: string; batch_remaining?: Array<{ tool: string; arguments: string }>; answered?: boolean }
   | { id: string; type: 'onboard_required'; methods: string[]; paymentAmount?: number; paymentAddress?: string }
