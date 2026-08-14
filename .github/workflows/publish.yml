@@ -5,20 +5,62 @@ on:
     tags:
       - 'v*'
 
-permissions:
-  contents: read
-  id-token: write
-
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      npm-tag: ${{ steps.release.outputs.npm-tag }}
+      version: ${{ steps.release.outputs.version }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
+
+      - name: Verify reviewed release tag
+        id: release
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION=${GITHUB_REF_NAME#v}
+          echo "package.json=$PKG_VERSION  tag=$TAG_VERSION"
+          if [[ ! "$PKG_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]]; then
+            echo "::error::Unsupported release version: $PKG_VERSION"
+            exit 1
+          fi
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+
+          TAG_COMMIT=$(git rev-parse "${GITHUB_REF_NAME}^{commit}")
+          MAIN_COMMIT=$(git rev-parse origin/main)
+          if [ "$TAG_COMMIT" != "$MAIN_COMMIT" ]; then
+            echo "::error::Release tag must point to the current reviewed main commit"
+            echo "tag=$TAG_COMMIT main=$MAIN_COMMIT"
+            exit 1
+          fi
+
+          case "$PKG_VERSION" in
+            *-alpha.*) NPM_TAG=alpha ;;
+            *-beta.*) NPM_TAG=beta ;;
+            *-rc.*) NPM_TAG=rc ;;
+            *-*)
+              echo "::error::Unsupported prerelease version: $PKG_VERSION"
+              exit 1
+              ;;
+            *) NPM_TAG=latest ;;
+          esac
+
+          echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "npm-tag=$NPM_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Install exact dependencies
         run: npm ci
@@ -29,18 +71,6 @@ jobs:
       - name: Type-check
         run: npm run typecheck
 
-      # Fail early if the pushed tag doesn't match the version being published —
-      # catches a mistyped tag or a forgotten version bump before it hits npm.
-      - name: Verify tag matches package.json version
-        run: |
-          PKG_VERSION=$(node -p "require('./package.json').version")
-          TAG_VERSION=${GITHUB_REF_NAME#v}
-          echo "package.json=$PKG_VERSION  tag=$TAG_VERSION"
-          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION"
-            exit 1
-          fi
-
       # Never publish a broken release.
       - name: Test
         run: npx jest
@@ -48,21 +78,78 @@ jobs:
       - name: Build
         run: npm run build
 
-      # 0.2.2 shipped with peerDependencies still pointing at a local tarball
-      # path, so it resolved fine in the repo and was uninstallable everywhere
-      # else. Pack it and install it into a clean project before publishing.
-      - name: Install the packed tarball into a clean project
+      - name: Pack the release artifact
+        id: pack
         run: |
           TARBALL=$(npm pack --silent)
-          mkdir -p /tmp/install-check && cd /tmp/install-check
+          sha256sum "$TARBALL" > "$TARBALL.sha256"
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+
+      # 0.2.2 shipped with a local peer-dependency path. Install the exact archive
+      # that the publish job will receive, not a second package assembled later.
+      - name: Install the packed tarball into a clean project
+        run: |
+          mkdir -p "$RUNNER_TEMP/install-check"
+          cd "$RUNNER_TEMP/install-check"
           npm init -y >/dev/null
-          npm install react react-dom "$GITHUB_WORKSPACE/$TARBALL"
+          npm install react react-dom "$GITHUB_WORKSPACE/${{ steps.pack.outputs.tarball }}"
           node -e "require('@connectonion/react')"
           node --input-type=module -e "await import('@connectonion/react/experimental/native-acp')"
 
-      - name: Publish to npm
+      - name: Preserve the exact release artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: npm-package-${{ steps.release.outputs.version }}
+          path: |
+            ${{ steps.pack.outputs.tarball }}
+            ${{ steps.pack.outputs.tarball }}.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download the reviewed release artifact
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: npm-package-${{ needs.build.outputs.version }}
+          path: release-artifact
+
+      - name: Verify the reviewed release artifact
+        id: artifact
+        working-directory: release-artifact
         run: |
-          PKG_VERSION=$(node -p "require('./package.json').version")
-          NPM_TAG=$(node -p "require('./package.json').version.split('-')[1]?.split('.')[0] || 'latest'")
-          echo "Publishing $PKG_VERSION with npm dist-tag $NPM_TAG"
-          npm publish --provenance --access public --tag "$NPM_TAG"
+          sha256sum -c ./*.sha256
+          mapfile -t TARBALLS < <(find . -maxdepth 1 -type f -name '*.tgz' -print)
+          if [ "${#TARBALLS[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one npm tarball"
+            exit 1
+          fi
+
+          mkdir package
+          tar -xzf "${TARBALLS[0]}" -C package
+          ARTIFACT_VERSION=$(node -e "console.log(require(process.argv[1]).version)" "$PWD/package/package/package.json")
+          if [ "$ARTIFACT_VERSION" != "${{ needs.build.outputs.version }}" ]; then
+            echo "::error::Artifact version $ARTIFACT_VERSION does not match reviewed version ${{ needs.build.outputs.version }}"
+            exit 1
+          fi
+
+          echo "tarball=${TARBALLS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to npm
+        working-directory: release-artifact
+        run: |
+          echo "Publishing ${{ needs.build.outputs.version }} with npm dist-tag ${{ needs.build.outputs.npm-tag }}"
+          npm publish "${{ steps.artifact.outputs.tarball }}" \
+            --provenance \
+            --access public \
+            --tag "${{ needs.build.outputs.npm-tag }}"
