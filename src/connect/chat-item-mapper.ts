@@ -10,6 +10,9 @@ import { decodeIncomingEvent } from './wire-events';
 
 const SUCCESSFUL_TOOL_RESULTS = new Set(['success', 'done', 'completed']);
 const RUNNING_TOOL_STATUSES = new Set(['pending', 'running', 'in_progress']);
+const PROVIDER_STATUSES = new Set([
+  'starting', 'running', 'awaiting_approval', 'completed', 'failed', 'cancelled',
+]);
 
 function toolResultStatus(status: unknown): 'done' | 'error' {
   return typeof status === 'string' && SUCCESSFUL_TOOL_RESULTS.has(status)
@@ -22,6 +25,14 @@ function toolStartStatus(status: unknown): 'running' | 'error' {
     return 'running';
   }
   return 'error';
+}
+
+function providerInvocation(chatItems: ChatItem[], parentId: unknown) {
+  if (typeof parentId !== 'string') return undefined;
+  return chatItems.find(
+    (item): item is Extract<ChatItem, { type: 'provider_invocation' }> =>
+      item.type === 'provider_invocation' && item.parentToolCallId === parentId
+  );
 }
 
 export function mapEventToChatItem(
@@ -38,8 +49,68 @@ export function mapEventToChatItem(
   ) return false;
 
   switch (decoded.type as string) {
+    case 'provider_invocation': {
+      if (
+        typeof decoded.invocationId !== 'string'
+        || typeof decoded.parentToolCallId !== 'string'
+        || (decoded.provider !== 'codex' && decoded.provider !== 'claude_code')
+      ) break;
+      const id = decoded.invocationId;
+      const existing = chatItems.find(
+        (item): item is Extract<ChatItem, { type: 'provider_invocation' }> =>
+          item.type === 'provider_invocation' && item.id === id
+      );
+      const update = {
+        ...(typeof decoded.taskSummary === 'string' && { taskSummary: decoded.taskSummary }),
+        ...(typeof decoded.status === 'string' && PROVIDER_STATUSES.has(decoded.status) && {
+          status: decoded.status as Extract<ChatItem, { type: 'provider_invocation' }>['status'],
+        }),
+        ...(typeof decoded.sessionId === 'string' && { sessionId: decoded.sessionId }),
+        ...(typeof decoded.elapsedMs === 'number' && { elapsedMs: decoded.elapsedMs }),
+        ...(typeof decoded.result === 'string' && { result: decoded.result }),
+        ...(typeof decoded.error === 'string' && { error: decoded.error }),
+      };
+      if (existing) {
+        Object.assign(existing, update);
+        break;
+      }
+      const item = {
+        id,
+        type: 'provider_invocation' as const,
+        parentToolCallId: decoded.parentToolCallId,
+        provider: decoded.provider,
+        providerDisplayName: typeof decoded.providerDisplayName === 'string'
+          ? decoded.providerDisplayName : decoded.provider,
+        permissionMode: decoded.permissionMode,
+        status: (
+          typeof decoded.status === 'string' && PROVIDER_STATUSES.has(decoded.status)
+            ? decoded.status : 'running'
+        ) as Extract<ChatItem, { type: 'provider_invocation' }>['status'],
+        activities: [],
+        ...update,
+      } as Extract<ChatItem, { type: 'provider_invocation' }>;
+      const parentIndex = chatItems.findIndex(
+        candidate => candidate.type === 'tool_call' && candidate.id === decoded.parentToolCallId
+      );
+      if (parentIndex >= 0) chatItems.splice(parentIndex, 1, item);
+      else addItem(item);
+      break;
+    }
     case 'tool_call': {
       const toolId = (decoded.tool_id || decoded.id) as string;
+      const invocation = providerInvocation(chatItems, decoded.parentToolCallId);
+      if (invocation) {
+        const existingActivity = invocation.activities.find(item => item.id === toolId);
+        const activity = {
+          id: toolId,
+          name: decoded.name as string,
+          args: decoded.args as Record<string, unknown>,
+          status: toolStartStatus(decoded.status),
+        };
+        if (existingActivity) Object.assign(existingActivity, activity);
+        else invocation.activities.push(activity);
+        break;
+      }
       const existing = chatItems.find(
         (item): item is ChatItem & { type: 'tool_call' } =>
           item.type === 'tool_call' && item.id === toolId
@@ -62,6 +133,16 @@ export function mapEventToChatItem(
 
     case 'tool_call_update': {
       const toolId = (decoded.tool_id || decoded.id) as string;
+      const invocation = providerInvocation(chatItems, decoded.parentToolCallId);
+      if (invocation) {
+        const activity = invocation.activities.find(item => item.id === toolId);
+        if (activity) {
+          activity.status = RUNNING_TOOL_STATUSES.has(String(decoded.status))
+            ? 'running' : toolResultStatus(decoded.status);
+          if (typeof decoded.result === 'string') activity.result = decoded.result;
+        }
+        break;
+      }
       const existing = chatItems.find(
         (e): e is ChatItem & { type: 'tool_call' } => e.type === 'tool_call' && e.id === toolId
       );
