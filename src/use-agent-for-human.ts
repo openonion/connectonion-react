@@ -127,6 +127,9 @@ export interface UseAgentForHumanReturn {
    */
   input: (prompt: string, options?: { images?: string[]; files?: import('./connect').FileAttachment[] }) => void;
 
+  /** Retry the last turn without appending a duplicate user transcript item. */
+  retry: (prompt: string, options?: { images?: string[]; files?: import('./connect').FileAttachment[] }) => void;
+
   /**
    * Open the WebSocket without sending input, so a landing/draft view receives the
    * Host's on-connect DASHBOARD_SNAPSHOT before the first message. Idempotent, and
@@ -387,6 +390,18 @@ export function useAgentForHuman(
     agent.input(prompt, options).catch(() => {});
   };
 
+  const retry = (prompt: string, options?: { images?: string[]; files?: import('./connect').FileAttachment[] }) => {
+    setError(null);
+    const agentSession = (agent as any)._currentSession || {};
+    (agent as any)._currentSession = {
+      ...agentSession,
+      ...(session || {}),
+      session_id: sessionId,
+      messages: session?.messages || messages,
+    };
+    agent.input(prompt, { ...options, retry: true }).catch(() => {});
+  };
+
   const reconnect = () => {
     // Ensure session is set on agent before reconnecting
     if (!(agent as any)._currentSession?.session_id) {
@@ -486,6 +501,7 @@ export function useAgentForHuman(
     fullAccessTurns: session?.full_access_turns ?? null,
     fullAccessTurnsUsed: session?.full_access_turns_used ?? null,
     input,
+    retry,
     connect,
     sendMessage,
     respondToApproval,

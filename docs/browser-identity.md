@@ -7,8 +7,8 @@
 
 ## Context
 
-ConnectOnion browser clients sign legacy WebSocket and native ACP admission with
-an Ed25519 identity. The old implementation serialized the private key as hex in
+ConnectOnion browser clients sign OIP WebSocket admission with an Ed25519
+identity. The old implementation serialized the private key as hex in
 `localStorage['connectonion_keys']`; O Chat also stored its recovery phrase in
 that record. Any script running on the origin, browser-storage export, or copied
 profile could read a durable reusable private key.
@@ -31,9 +31,8 @@ separate required controls.
 
 ## Decision
 
-1. React owns one asynchronous `MessageSigner` boundary used by legacy
-   WebSocket CONNECT, native ACP ticket authorization, onboarding, and
-   transcription.
+1. React owns one asynchronous `MessageSigner` boundary used by OIP CONNECT,
+   authenticated commands, onboarding, and transcription.
 2. A browser identity derives Ed25519 from a BIP39 recovery phrase, imports the
    32-byte seed into WebCrypto as `extractable: false`, and stores the resulting
    private `CryptoKey` in a dedicated IndexedDB database.
