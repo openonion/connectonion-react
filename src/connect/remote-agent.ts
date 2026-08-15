@@ -231,9 +231,17 @@ export class RemoteAgent {
     }
   }
 
-  async input(prompt: string, options?: { images?: string[]; files?: import('./types').FileAttachment[] }): Promise<Response> {
+  async input(prompt: string, options?: {
+    images?: string[];
+    files?: import('./types').FileAttachment[];
+    /** Re-run the last user turn without duplicating its transcript item. */
+    retry?: boolean;
+  }): Promise<Response> {
     const connectionEpoch = this._connectionEpoch;
-    this._addChatItem({ type: 'user', content: prompt, images: options?.images, files: options?.files });
+    const lastUser = [...this._chatItems].reverse().find((item) => item.type === 'user');
+    if (!options?.retry || lastUser?.type !== 'user' || lastUser.content !== prompt) {
+      this._addChatItem({ type: 'user', content: prompt, images: options?.images, files: options?.files });
+    }
 
     const isInterjection = this._status === 'working' && this._inputResolve !== null;
 
@@ -941,6 +949,11 @@ export class RemoteAgent {
         this._applyServerMode(this._permissionProfileState.currentModeId);
       }
       if (this._connectResolve) {
+        // Authentication is observable state, so commit it before resolving the
+        // connect promise or notifying UI subscribers. A route handoff or an
+        // onboarding-success render can synchronously send from that callback.
+        this._authenticated = true;
+        this._connectionState = 'connected';
         if (this._connectTimer) { clearTimeout(this._connectTimer); this._connectTimer = null; }
         const resolve = this._connectResolve;
         this._connectResolve = null;
@@ -1223,6 +1236,10 @@ export class RemoteAgent {
       if (pendingProfile) this._rejectPermissionProfileChange(pendingProfile, err);
       const onboarding = this._status === 'waiting';
       this._error = err;
+      // ERROR is terminal for the current attempt. Leaving the optimistic
+      // thinking item behind makes consumers derive "still loading" forever
+      // even though status has returned to idle (the production stuck spinner).
+      this._clearPlaceholder();
       // Not while a human is onboarding. ONBOARD_REQUIRED leaves the connect
       // pending on purpose — the host finishes the interrupted CONNECT itself
       // after a good code, so there is no client retry to resolve anything

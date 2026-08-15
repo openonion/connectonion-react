@@ -96,6 +96,37 @@ describe('an ERROR during CONNECT', () => {
 
     await expect(input).rejects.toThrow(/boom/);
   });
+
+  it('clears optimistic thinking when the host terminates the turn', async () => {
+    const agent = new RemoteAgent('0x' + 'a'.repeat(64), {}) as any;
+    agent._ws = new FakeSocket();
+    agent._addChatItem({ type: 'thinking', id: '__optimistic__', status: 'running' });
+    const input = new Promise((_, reject) => { agent._inputReject = reject; });
+
+    agent._handleMessage({ data: JSON.stringify({ type: 'ERROR', message: 'boom' }) });
+
+    await expect(input).rejects.toThrow(/boom/);
+    expect(agent.ui).not.toContainEqual(expect.objectContaining({ id: '__optimistic__' }));
+    expect(agent.status).toBe('idle');
+  });
+
+  it('retries a failed turn without duplicating its user transcript item', async () => {
+    const agent = new RemoteAgent('0x' + 'a'.repeat(64), {}) as any;
+    agent._ws = new FakeSocket();
+    agent._authenticated = true;
+    agent._ensureConnected = jest.fn().mockResolvedValue(undefined);
+
+    const first = agent.input('inspect this repo');
+    await Promise.resolve();
+    agent._handleMessage({ data: JSON.stringify({ type: 'ERROR', message: 'temporary' }) });
+    await expect(first).rejects.toThrow(/temporary/);
+
+    const retried = agent.input('inspect this repo', { retry: true });
+    await Promise.resolve();
+    expect(agent.ui.filter((item: { type: string }) => item.type === 'user')).toHaveLength(1);
+    agent._handleMessage({ data: JSON.stringify({ type: 'ERROR', message: 'stop test' }) });
+    await expect(retried).rejects.toThrow(/stop test/);
+  });
 });
 
 describe('an ERROR while a human is onboarding', () => {
@@ -142,5 +173,20 @@ describe('an ERROR while a human is onboarding', () => {
     deliver({ type: 'CONNECTED', session_id: 's1', status: 'new' });
 
     await expect(resolved).resolves.toBeDefined();
+  });
+
+  it('commits authentication before notifying route-handoff subscribers', () => {
+    const { agent, deliver } = onboarding();
+    let authenticatedDuringFlush = false;
+    agent.onMessage = () => { authenticatedDuringFlush = agent._authenticated; };
+
+    deliver({
+      type: 'CONNECTED',
+      protocol: { name: 'oip', version: '0.1' },
+      session_id: 's1',
+      status: 'new',
+    });
+
+    expect(authenticatedDuringFlush).toBe(true);
   });
 });

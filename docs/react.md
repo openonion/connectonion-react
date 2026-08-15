@@ -66,24 +66,18 @@ const {
 | `address` | `string` | Agent's public address (0x...) |
 | `sessionId` | `string` | Required unique ID for this conversation |
 
-## Native ACP transport selection
+## OIP transport
 
-Modern ESM imports of `@connectonion/react` register the official ACP SDK driver. Before a
-prompt, the hook performs non-cacheable `/info` discovery and chooses exactly one path:
+`@connectonion/react` owns the browser implementation of OIP. The hook resolves
+the agent endpoint, opens `/ws`, signs `CONNECT`, and keeps one authenticated
+socket for input, streaming activity, approvals, interruption, onboarding, and
+reconnect. Components render typed state and call typed operations; they do not
+construct wire frames.
 
-- an exact ConnectOnion ACP descriptor selects direct native ACP;
-- a successful matching response with the descriptor genuinely absent selects legacy
-  compatibility;
-- malformed discovery and every native admission, initialize, session, resume, or prompt
-  failure fail closed without opening `/ws`.
-
-CommonJS `require('@connectonion/react')` remains legacy-compatible. Components do not need to
-import the low-level native module and must not construct JSON-RPC frames.
-
-The native client sends `cwd: "/"`, `mcpServers: []`, and no Host path. It stores the
-server-issued ACP session ID separately from the application `sessionId`; resume restores
-private Agent continuation while the persisted `ui` array remains the rendering source.
-Images and embedded files use the capabilities and content blocks negotiated through ACP.
+OIP is the only browser protocol in this release; there is no alternate
+discovery, ticket, JSON-RPC driver, or compatibility fallback. Codex and Claude
+Code are provider tools behind the Host and report their activity through
+OIP's shared provider-invocation lifecycle.
 
 If the authenticated Host requires onboarding, the original `connect()` or `input()` remains
 pending. A signed invite/payment submission retries admission and then continues that exact
@@ -110,25 +104,18 @@ The `ui` array contains events for rendering the conversation. Each event has:
 | `onboard_required` | Host admission needs invite/payment | `methods`, `paymentAmount?`, `paymentAddress?` |
 | `onboard_success` | Admission completed | `level`, `message` |
 
-A ConnectOnion Host may deliver its public, application-authored thought text through ACP
-`agent_thought_chunk`; the SDK normalizes it to `thinking` and de-duplicates it
-with legacy/replayed events by persisted ID. The ConnectOnion Host profile sends one
-complete recorded thought per ID and does not claim provider token streaming. React
-decodes text explicitly sent in the frame and cannot classify its origin. The profile maps only
-persisted, already-visible application `thinking` events—not provider diagnostics or
-hidden model fields—to this update; third-party Hosts define their own privacy contract.
+A ConnectOnion Host may deliver public, application-authored thought text as an
+OIP `thinking` event. React normalizes and de-duplicates it by persisted ID. The
+Host sends only recorded application-visible text, never hidden provider
+diagnostics or model fields; third-party Hosts define their own privacy contract.
 
 ### Tool approvals
 
 Render one approval item and answer it through the hook. The React package owns
-ACP request IDs, Host session correlation, legacy fallback, and duplicate
-suppression; components should not construct protocol frames.
-
-Native ACP may deliver `session/request_permission` before a separate tool
-update. React therefore creates or reuses one `tool_call` with the request's
-stable `toolCallId` before appending `approval_needed`. Components can always
-render the decision inline with that running tool card without parsing ACP or
-inventing a second correlation rule.
+OIP request IDs, Host session correlation, and duplicate suppression;
+components should not construct protocol frames. A Host may deliver
+`approval_needed` before a separate tool update, so React creates or reuses one
+stable running tool card before appending the approval item.
 
 At the prompt boundary, every permission tool card that still lacks an official
 terminal update becomes `error`. React does not manufacture success from a
@@ -206,7 +193,7 @@ const { plan } = useAgentForHuman(address, sessionId)
 ```
 
 Each entry has `content`, `priority` (`high | medium | low`), and `status`
-(`pending | in_progress | completed`). Every ACP plan update replaces the whole list;
+(`pending | in_progress | completed`). Every OIP plan update replaces the whole list;
 an empty list clears it. The snapshot persists with its session and is restored on
 reconnect. It is read-only progress state, not an approval surface: keep interactive
 `plan_review` handling separate and never use `plan` to authorize implementation.
@@ -458,8 +445,8 @@ connection options such as an explicit signer or a direct URL.
 ## Browser identity and recovery
 
 Browser identity belongs to `@connectonion/react`, not to the application UI or
-the retired standalone TypeScript SDK. The default connection, native ACP
-admission, onboarding, and transcription all use the same async signer.
+the retired standalone TypeScript SDK. OIP connection, onboarding,
+authenticated commands, and transcription all use the same async signer.
 
 ```tsx
 import {

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.2-alpha.6 — 2026-08-16
+
+Production-blocker follow-up for the OIP browser lifecycle and interactive
+coding-agent Work Rooms.
+
+### Fixed
+
+- Commit authenticated connection state before resolving `CONNECTED` or
+  notifying route subscribers, closing the landing-to-session handoff race that
+  could send the first post-onboarding input before the session was ready.
+- Remove optimistic thinking state on terminal Host errors so consumers cannot
+  remain visibly busy after an error.
+- Add `retry()` to resend a failed turn without appending a duplicate user
+  transcript item.
+
+### Release boundary
+
+- OIP remains the sole browser protocol; this release adds no alternate
+  transport or compatibility path.
+- Publish under the npm `alpha` dist-tag; stable `latest` remains `0.4.1`.
+- O Chat must pin `0.4.2-alpha.6` exactly and verify invite → first input,
+  terminal errors, Codex cards, and desktop/mobile Work Rooms before production.
+
 ## 0.4.2-alpha.3 — 2026-08-14
 
 Security and consumer follow-up for React-owned identity and Turbopack
