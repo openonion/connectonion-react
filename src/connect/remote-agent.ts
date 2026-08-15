@@ -48,6 +48,7 @@ import {
 } from './endpoint';
 import { ensureSigner, signPayload, type MessageSigner } from './auth';
 import { mapEventToChatItem } from './chat-item-mapper';
+import { OIP_PROTOCOL, OipCompatibilityError, supportsOip } from './protocol';
 import {
   isCanonicalPermissionProfile,
   normalizeCollaborationMode,
@@ -370,7 +371,12 @@ export class RemoteAgent {
         this._startPingMonitor();
 
         // Send CONNECT with session_id + session data
-        const msg: Record<string, unknown> = { type: 'CONNECT', session_id: sid, ...signed };
+        const msg: Record<string, unknown> = {
+          type: 'CONNECT',
+          protocol: OIP_PROTOCOL,
+          session_id: sid,
+          ...signed,
+        };
         if (!isDirect) msg.to = this.address;
         if (this._currentSession) msg.session = { ...this._currentSession };
         ws.send(JSON.stringify(msg));
@@ -857,7 +863,11 @@ export class RemoteAgent {
     const payload: Record<string, unknown> = { timestamp: Math.floor(Date.now() / 1000) };
     payload.to = this.address;
     const signed = await signPayload(this._signer, payload);
-    const connectMsg: Record<string, unknown> = { type: 'CONNECT', ...signed };
+    const connectMsg: Record<string, unknown> = {
+      type: 'CONNECT',
+      protocol: OIP_PROTOCOL,
+      ...signed,
+    };
     if (!isDirect) connectMsg.to = this.address;
     if (this._currentSession?.session_id) connectMsg.session_id = this._currentSession.session_id;
     if (this._currentSession) connectMsg.session = { ...this._currentSession };
@@ -922,22 +932,8 @@ export class RemoteAgent {
 
     // CONNECTED — resolve ensureConnected() promise
     if (data?.type === 'CONNECTED') {
-      const advertisedProtocol = data.protocol as { name?: unknown; version?: unknown } | undefined;
-      if (
-        advertisedProtocol
-        && (advertisedProtocol.name !== 'oip' || advertisedProtocol.version !== '0.1')
-      ) {
-        const error = new Error(
-          `Unsupported agent protocol: ${String(advertisedProtocol.name)}/${String(advertisedProtocol.version)}; expected oip/0.1`,
-        );
-        if (this._connectTimer) { clearTimeout(this._connectTimer); this._connectTimer = null; }
-        const reject = this._connectReject;
-        this._connectResolve = null;
-        this._connectReject = null;
-        this._error = error;
-        this._status = 'idle';
-        reject?.(error);
-        this._onMessage?.();
+      if (!supportsOip(data.protocol)) {
+        this._rejectUnsupportedProtocol(data.protocol);
         return;
       }
       this._permissionProfileState = hostSessionModeState(data);
@@ -1258,6 +1254,22 @@ export class RemoteAgent {
     this._connectResolve = null;
     this._connectReject = null;
     if (err) reject?.(err);
+  }
+
+  private _rejectUnsupportedProtocol(received: unknown): void {
+    const error = new OipCompatibilityError(received);
+    const rejectConnect = this._connectReject;
+    const rejectInput = this._inputReject;
+    this._connectResolve = null;
+    this._connectReject = null;
+    this._settleInput();
+    this._settleReconnectReady(error);
+    this._closeWs();
+    this._error = error;
+    this._status = 'idle';
+    rejectConnect?.(error);
+    rejectInput?.(error);
+    this._onMessage?.();
   }
 
   private _handleConnectionLoss(): void {
