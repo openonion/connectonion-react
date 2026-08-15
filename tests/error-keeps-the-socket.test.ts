@@ -76,3 +76,40 @@ describe('an ERROR frame', () => {
     expect(agent._connectionState).toBe('connected');
   });
 });
+
+describe('the OIP protocol descriptor', () => {
+  it('accepts the supported OIP version', async () => {
+    const { agent, deliver } = agentWithSocket();
+    const pending = new Promise((resolve, reject) => {
+      agent._connectResolve = resolve;
+      agent._connectReject = reject;
+    });
+
+    deliver({
+      type: 'CONNECTED',
+      session_id: 's1',
+      status: 'new',
+      protocol: { name: 'oip', version: '0.1' },
+    });
+
+    await expect(pending).resolves.toMatchObject({ type: 'CONNECTED' });
+  });
+
+  it('rejects an advertised unsupported protocol', async () => {
+    const { agent, deliver } = agentWithSocket();
+    const pending = new Promise((resolve, reject) => {
+      agent._connectResolve = resolve;
+      agent._connectReject = reject;
+    });
+
+    deliver({
+      type: 'CONNECTED',
+      session_id: 's1',
+      status: 'new',
+      protocol: { name: 'unsupported', version: '1' },
+    });
+
+    await expect(pending).rejects.toThrow(/expected oip\/0\.1/);
+    expect(agent.error?.message).toMatch(/Unsupported agent protocol/);
+  });
+});

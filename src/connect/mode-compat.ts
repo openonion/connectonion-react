@@ -86,12 +86,6 @@ export function normalizeSessionState(value: unknown): SessionState | null {
   const raw = value as Record<string, unknown>;
   const normalized = { ...raw } as Record<string, unknown>;
 
-  if (
-    typeof raw.acp_session_id !== 'string'
-    || raw.acp_session_id.length === 0
-    || raw.acp_session_id.length > 256
-  ) delete normalized.acp_session_id;
-
   const legacyPlan = raw.mode === 'plan';
   const profile = Object.prototype.hasOwnProperty.call(raw, 'mode')
     ? normalizePermissionProfile(raw.mode) ?? ':read-only'

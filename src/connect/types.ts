@@ -153,13 +153,13 @@ export interface ConnectOptions {
   wsCtor?: WebSocketCtor;
 }
 
-/** Stable ACP plan priority. Kept separate from ConnectOnion's approval mode. */
+/** Stable OIP plan priority. Kept separate from ConnectOnion's approval mode. */
 export type PlanEntryPriority = 'high' | 'medium' | 'low';
 
-/** Stable ACP plan lifecycle state. */
+/** Stable OIP plan lifecycle state. */
 export type PlanEntryStatus = 'pending' | 'in_progress' | 'completed';
 
-/** One item in the current session's full ACP plan snapshot. */
+/** One item in the current session's full OIP plan snapshot. */
 export interface PlanEntry {
   readonly content: string;
   readonly priority: PlanEntryPriority;
@@ -168,12 +168,10 @@ export interface PlanEntry {
 
 export interface SessionState {
   session_id?: string;
-  /** Server-issued native ACP session ID; separate from the UI route/cache key. */
-  acp_session_id?: string;
   messages?: Array<{ role: string; content: string }>;
   trace?: unknown[];
   turn?: number;
-  /** Latest full ACP plan snapshot. An empty array explicitly clears the plan. */
+  /** Latest full OIP plan snapshot. An empty array explicitly clears the plan. */
   plan?: ReadonlyArray<PlanEntry>;
   /** Host-enforced permission profile. Kept in `mode` for wire compatibility. */
   mode?: PermissionProfile;

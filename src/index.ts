@@ -21,9 +21,6 @@ export type {
   PlanEntryPriority,
   PlanEntryStatus,
   OutgoingMessage,
-  ACPNotificationFrame,
-  ACPPermissionRequest,
-  ACPPlanUpdate,
   HostSessionModeState,
   ApprovalRejectMode,
 } from './connect';

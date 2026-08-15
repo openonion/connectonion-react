@@ -1,6 +1,6 @@
 {
   "name": "@connectonion/react",
-  "version": "0.4.2-alpha.3",
+  "version": "0.4.2-alpha.4",
   "description": "React hooks for ConnectOnion agents \u2014 useAgentForHuman, useVoiceInput, browser identity, and the agent connection itself",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -23,10 +23,6 @@
       "types": "./dist/transcribe.d.ts",
       "default": "./dist/transcribe.js"
     },
-    "./experimental/native-acp": {
-      "types": "./dist/experimental/native-acp.d.mts",
-      "import": "./dist/experimental/native-acp.mjs"
-    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -35,12 +31,11 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "npm run build:compile && npm run verify:native-acp",
+    "build": "npm run build:compile",
     "build:compile": "tsc && tsc -p tsconfig.experimental.json",
     "pretest": "npm run build:compile",
     "test": "jest",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.experimental.json --noEmit",
-    "verify:native-acp": "node scripts/verify-native-acp.mjs",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -63,7 +58,6 @@
   },
   "homepage": "https://github.com/openonion/connectonion-react#readme",
   "dependencies": {
-    "@agentclientprotocol/sdk": "1.2.1",
     "@scure/bip39": "1.6.0",
     "tweetnacl": "^1.0.3",
     "ws": "^8.18.0",

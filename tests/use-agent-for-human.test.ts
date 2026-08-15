@@ -89,23 +89,13 @@ class PlanWebSocket extends MockWebSocket {
     if (msg.type !== 'CONNECT') return;
     setTimeout(() => this.onmessage?.({
       data: JSON.stringify({
-        type: 'ACP_NOTIFICATION',
-        acpSchema: 'schema-v1.19.0',
-        message: {
-          jsonrpc: '2.0',
-          method: 'session/update',
-          params: {
-            sessionId: msg.session_id,
-            update: {
-              sessionUpdate: 'plan',
-              entries: [{
-                content: 'Render the plan',
-                priority: 'high',
-                status: 'in_progress',
-              }],
-            },
-          },
-        },
+        type: 'plan',
+        session_id: msg.session_id,
+        entries: [{
+          content: 'Render the plan',
+          priority: 'high',
+          status: 'in_progress',
+        }],
       }),
     }), 10);
   }
@@ -217,7 +207,7 @@ describe('useAgentForHuman hook', () => {
       });
     });
 
-    it('exposes React-normalized ACP plan state outside the chat timeline', async () => {
+    it('exposes React-normalized OIP plan state outside the chat timeline', async () => {
       ActiveWS = PlanWebSocket;
       const addr = uniqueAddr();
       const { result } = renderHook(() =>
@@ -317,7 +307,7 @@ describe('useAgentForHuman hook', () => {
       expect(result.current.isProcessing).toBe(false);
     });
 
-    it('surfaces an authoritative ACP mode update to hook consumers', async () => {
+    it('surfaces an authoritative OIP mode update to hook consumers', async () => {
       class ModeWS extends MockWebSocket {
         override send(data: unknown): void {
           const msg = JSON.parse(String(data));
@@ -325,22 +315,6 @@ describe('useAgentForHuman hook', () => {
             super.send(data);
             return;
           }
-          const frame = {
-            type: 'ACP_NOTIFICATION',
-            acpSchema: 'schema-v1.19.0',
-            message: {
-              jsonrpc: '2.0',
-              method: 'session/update',
-              params: {
-                sessionId: 'mode-session',
-                update: {
-                  sessionUpdate: 'current_mode_update',
-                  currentModeId: ':workspace',
-                },
-              },
-            },
-          };
-          setTimeout(() => this.onmessage?.({ data: JSON.stringify(frame) }), 0);
           setTimeout(() => this.onmessage?.({
             data: JSON.stringify({ type: 'mode_changed', mode: ':workspace' }),
           }), 1);
@@ -370,8 +344,6 @@ describe('useAgentForHuman hook', () => {
     it('exposes advertised modes and waits for the acknowledged mode response', async () => {
       let socket: ModeTransactionWS | null = null;
       class ModeTransactionWS extends MockWebSocket {
-        requestId: string | null = null;
-
         constructor(url: string) {
           super(url);
           socket = this;
@@ -391,12 +363,6 @@ describe('useAgentForHuman hook', () => {
                 mode: ':workspace',
                 messages: [],
               },
-              carrier_capabilities: {
-                acp: {
-                  schema: 'schema-v1.19.0',
-                  client_requests: ['session/set_mode'],
-                },
-              },
               session_modes: {
                 currentModeId: ':read-only',
                 availableModes: [
@@ -408,15 +374,14 @@ describe('useAgentForHuman hook', () => {
             setTimeout(() => this.onmessage?.({ data: JSON.stringify(reply) }), 0);
             return;
           }
-          if (msg.type === 'ACP_REQUEST') this.requestId = msg.message.id;
+          if (msg.type !== 'mode_change') super.send(data);
         }
 
         acknowledge(): void {
           this.onmessage?.({ data: JSON.stringify({
-            type: 'ACP_RESPONSE',
-            acpSchema: 'schema-v1.19.0',
-            sessionId: 'mode-write-session',
-            message: { jsonrpc: '2.0', id: this.requestId, result: {} },
+            type: 'mode_changed',
+            session_id: 'mode-write-session',
+            mode: ':workspace',
           }) });
         }
       }
@@ -442,14 +407,8 @@ describe('useAgentForHuman hook', () => {
       });
       expect(result.current.permissionProfile).toBe(':read-only');
       expect(result.current.permissionProfileChangePending).toBe(true);
-      expect(sentFrames.find((frame) => frame.type === 'ACP_REQUEST')).toMatchObject({
-        message: {
-          method: 'session/set_mode',
-          params: {
-            sessionId: 'mode-write-session',
-            modeId: ':workspace',
-          },
-        },
+      expect(sentFrames.find((frame) => frame.type === 'mode_change')).toMatchObject({
+        mode: ':workspace',
       });
 
       await act(async () => {
@@ -474,12 +433,6 @@ describe('useAgentForHuman hook', () => {
             type: 'CONNECTED',
             session_id: msg.session_id,
             status: 'new',
-            carrier_capabilities: {
-              acp: {
-                schema: 'schema-v1.19.0',
-                client_requests: ['session/set_mode'],
-              },
-            },
             session_modes: {
               currentModeId: ':workspace',
               availableModes: [
@@ -519,12 +472,6 @@ describe('useAgentForHuman hook', () => {
             type: 'CONNECTED',
             session_id: msg.session_id,
             status: 'new',
-            carrier_capabilities: {
-              acp: {
-                schema: 'schema-v1.19.0',
-                client_requests: ['session/set_mode'],
-              },
-            },
             session_modes: {
               currentModeId: ':workspace',
               availableModes: [

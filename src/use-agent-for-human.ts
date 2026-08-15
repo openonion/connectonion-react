@@ -52,7 +52,7 @@ export interface UseAgentForHumanReturn {
    */
   ui: ChatItem[];
 
-  /** Latest full ACP plan snapshot for this session. Never a chat item. */
+  /** Latest full OIP plan snapshot for this session. Never a chat item. */
   plan: ReadonlyArray<PlanEntry>;
 
   /** Session UUID passed to the hook. Echoed here so consumers don't need a separate ref. */
@@ -142,7 +142,7 @@ export interface UseAgentForHumanReturn {
    */
   sendMessage: (message: OutgoingMessage) => void;
 
-  /** Answer the one currently pending tool approval through ACP or legacy Host. */
+  /** Answer the one currently pending OIP tool approval. */
   respondToApproval: (
     approved: boolean,
     scope: 'once' | 'session',
@@ -150,7 +150,7 @@ export interface UseAgentForHumanReturn {
     feedback?: string,
   ) => void;
 
-  /** Stop the current turn through negotiated ACP or one-shot legacy fallback. */
+  /** Stop the current OIP turn. */
   interrupt: () => void;
 
   /** Sign an onboard payload asynchronously. Pass the resolved result to sendMessage(). */
@@ -407,7 +407,7 @@ export function useAgentForHuman(
   // fresh closure per render would re-run that effect on every render.
   const connect = useCallback(() => {
     // A warm connection must claim the hook's session before CONNECT. Otherwise
-    // the Host allocates another ID, then strict ACP session checks reject the
+    // the Host allocates another ID, then strict session checks reject the
     // permission request for the conversation this hook is rendering.
     if (!(agent as any)._currentSession?.session_id) {
       (agent as any)._currentSession = { session_id: sessionId };
