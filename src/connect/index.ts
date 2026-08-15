@@ -14,6 +14,11 @@ export type {
   ApprovalRejectMode,
 } from './wire-events';
 export { fetchAgentInfo } from './endpoint';
+export {
+  OIP_PROTOCOL,
+  OipCompatibilityError,
+  supportsOip,
+} from './protocol';
 export { RemoteAgent } from './remote-agent';
 
 /**

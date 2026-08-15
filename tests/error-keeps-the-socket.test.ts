@@ -78,6 +78,18 @@ describe('an ERROR frame', () => {
 });
 
 describe('the OIP protocol descriptor', () => {
+  it('accepts a legacy Host with no descriptor during the rolling window', async () => {
+    const { agent, deliver } = agentWithSocket();
+    const pending = new Promise((resolve, reject) => {
+      agent._connectResolve = resolve;
+      agent._connectReject = reject;
+    });
+
+    deliver({ type: 'CONNECTED', session_id: 's1', status: 'new' });
+
+    await expect(pending).resolves.toMatchObject({ type: 'CONNECTED' });
+  });
+
   it('accepts the supported OIP version', async () => {
     const { agent, deliver } = agentWithSocket();
     const pending = new Promise((resolve, reject) => {
@@ -96,7 +108,7 @@ describe('the OIP protocol descriptor', () => {
   });
 
   it('rejects an advertised unsupported protocol', async () => {
-    const { agent, deliver } = agentWithSocket();
+    const { agent, socket, deliver } = agentWithSocket();
     const pending = new Promise((resolve, reject) => {
       agent._connectResolve = resolve;
       agent._connectReject = reject;
@@ -111,5 +123,11 @@ describe('the OIP protocol descriptor', () => {
 
     await expect(pending).rejects.toThrow(/expected oip\/0\.1/);
     expect(agent.error?.message).toMatch(/Unsupported agent protocol/);
+    expect(agent.error).toMatchObject({
+      code: 'OIP_UNSUPPORTED_VERSION',
+      retryable: false,
+    });
+    expect(socket.closed).toBe(true);
+    expect(agent.connectionState).toBe('disconnected');
   });
 });

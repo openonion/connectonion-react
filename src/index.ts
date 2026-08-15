@@ -25,7 +25,12 @@ export type {
   ApprovalRejectMode,
 } from './connect';
 
-export { fetchAgentInfo } from './connect';
+export {
+  fetchAgentInfo,
+  OIP_PROTOCOL,
+  OipCompatibilityError,
+  supportsOip,
+} from './connect';
 
 // Store types
 export { type Message } from './store';
