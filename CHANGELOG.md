@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.2-alpha.7 — 2026-08-16
+
+Production recovery for relay sessions whose browser socket remains open after
+the Host has lost its authentication context.
+
+### Fixed
+
+- Treat the explicit Host response `authenticate first (send CONNECT)` as proof
+  that the rejected INPUT was not accepted, reconnect, and resend that INPUT
+  exactly once.
+- Keep the original input promise and optimistic transcript item across that
+  recovery, so the UI neither reports a false terminal error nor duplicates the
+  user turn.
+- Stop after one automatic recovery attempt; a second authentication rejection
+  remains visible and retryable instead of looping.
+
+### Release boundary
+
+- OIP remains the sole browser transport.
+- Publish under the npm `alpha` dist-tag; stable `latest` remains `0.4.1`.
+- O Chat must pin `0.4.2-alpha.7` exactly and repeat the live first-input and
+  Codex Work Room acceptance against production.
+
 ## 0.4.2-alpha.6 — 2026-08-16
 
 Production-blocker follow-up for the OIP browser lifecycle and interactive
