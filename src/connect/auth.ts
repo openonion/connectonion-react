@@ -1,4 +1,4 @@
-/** Shared signer boundary for legacy WebSocket and native ACP authentication. */
+/** Shared signer boundary for OIP WebSocket authentication. */
 import * as address from '../address';
 import {
   initializeBrowserIdentity,

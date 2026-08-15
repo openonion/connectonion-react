@@ -39,14 +39,9 @@ export function mapEventToChatItem(
   chatItems: ChatItem[],
   event: Record<string, unknown>,
   addItem: (item: Partial<ChatItem> & { type: ChatItemType }) => void,
-  activeSessionId?: string,
+  _activeSessionId?: string,
 ): boolean {
   const decoded = decodeIncomingEvent(event);
-  if (!decoded) return false;
-  if (
-    event.type === 'ACP_NOTIFICATION'
-    && decoded._acp_session_id !== activeSessionId
-  ) return false;
 
   switch (decoded.type as string) {
     case 'provider_invocation': {
@@ -206,8 +201,8 @@ export function mapEventToChatItem(
         id: thoughtId,
         status: 'done',
       };
-      // Do not erase richer product metadata when an ACP/legacy twin arrives
-      // without it. RemoteAgent upserts stable IDs by spreading only present keys.
+      // Do not erase richer product metadata when an update arrives without it.
+      // RemoteAgent upserts stable IDs by spreading only present keys.
       if (content != null) item.content = content;
       if (kind != null) item.kind = kind;
       addItem(item);

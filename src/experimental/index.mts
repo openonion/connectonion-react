@@ -1,8 +1,4 @@
-/** Native-capable package root for modern ESM/browser consumers. */
-import { registerNativeACPDriver } from '../connect/native-acp-runtime.js';
-import { officialNativeACPDriver } from './native-acp.mjs';
-
-registerNativeACPDriver(officialNativeACPDriver);
+/** ESM/browser package root for the OIP client. */
 
 // Keep runtime exports explicit. Node can synthesize named exports through the
 // CommonJS barrel below, but browser bundlers such as Vite/Rolldown cannot

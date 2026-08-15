@@ -1,414 +1,78 @@
-/** ACP v1.19 compatibility decoding for the ConnectOnion WebSocket carrier. */
+/** Validation and normalization for ConnectOnion's OIP WebSocket events. */
 
-import type {
-  CancelNotification,
-  PermissionOption,
-  RequestPermissionRequest,
-  RequestPermissionResponse,
-  SessionMode,
-  SessionNotification,
-  SessionUpdate,
-  SetSessionModeRequest,
-  SetSessionModeResponse,
-  ToolCallStatus,
-} from '@agentclientprotocol/sdk';
 import type { PermissionProfile, PlanEntry } from './types';
 import { normalizePermissionProfile } from './mode-compat';
 
-const ACP_SCHEMA_VERSION = 'schema-v1.19.0';
-const TOOL_STATUSES = new Set(['pending', 'in_progress', 'completed', 'failed']);
 const PLAN_PRIORITIES = new Set<PlanEntry['priority']>(['high', 'medium', 'low']);
 const PLAN_STATUSES = new Set<PlanEntry['status']>([
   'pending',
   'in_progress',
   'completed',
 ]);
-const SESSION_MODES: Record<PermissionProfile, SessionMode> = {
-  ':read-only': {
-    id: ':read-only',
-    name: 'Read only',
-    description: 'Read freely; ask before edits, commands, or broader access.',
-  },
-  ':workspace': {
-    id: ':workspace',
-    name: 'Auto',
-    description: 'Edit the workspace automatically; broader actions still ask.',
-  },
-  ':danger-full-access': {
-    id: ':danger-full-access',
-    name: 'Full access',
-    description: 'Skip tool approval and continue to the configured checkpoint.',
-  },
-};
-const HOST_PERMISSION_KINDS = new Map<string, PermissionOption['kind']>([
-  ['allow_once', 'allow_once'],
-  ['allow_session', 'allow_always'],
-  ['reject_soft', 'reject_once'],
-  ['reject_hard', 'reject_once'],
-  ['reject_explain', 'reject_once'],
-]);
 
-export interface ACPNotificationFrame {
-  type: 'ACP_NOTIFICATION';
-  acpSchema: 'schema-v1.19.0';
-  message: {
-    jsonrpc: '2.0';
-    method: 'session/update';
-    params: SessionNotification;
-  };
-}
-
-export interface ACPPermissionRequest {
-  requestId: string;
-  sessionId: string;
-  toolCallId: string;
-  title: string;
-  rawInput: Record<string, unknown>;
-  options: PermissionOption[];
-}
-
-export interface ACPModeUpdate {
-  sessionId: string;
-  mode: PermissionProfile;
-}
-
-export interface ACPPlanUpdate {
-  sessionId: string;
-  entries: PlanEntry[];
+export interface HostSessionMode {
+  id: PermissionProfile;
+  name: string;
+  description?: string;
 }
 
 export interface HostSessionModeState {
   currentModeId: PermissionProfile;
-  availableModes: SessionMode[];
+  availableModes: HostSessionMode[];
 }
 
-export type ACPSetModeResponse =
-  | {
-    requestId: string;
-    sessionId: string;
-    result: SetSessionModeResponse;
-  }
-  | {
-    requestId: string;
-    sessionId: string;
-    error: {
-      code: number;
-      message: string;
-      data?: unknown;
-    };
-  };
+export interface OIPPlanUpdate {
+  sessionId: string;
+  entries: PlanEntry[];
+}
 
 export type ApprovalRejectMode =
   | 'reject_soft'
   | 'reject_hard'
   | 'reject_explain';
 
-export function hostSupportsACPCancel(
-  connected: Record<string, unknown>,
-): boolean {
-  const capabilities = record(connected.carrier_capabilities);
-  const acp = record(capabilities?.acp);
-  return acp?.schema === ACP_SCHEMA_VERSION
-    && Array.isArray(acp.client_notifications)
-    && acp.client_notifications.includes('session/cancel');
-}
-
-/** Parse the exact mode state attached to an advertised Host transaction. */
+/** Parse the exact permission state advertised in an OIP CONNECTED frame. */
 export function hostSessionModeState(
   connected: Record<string, unknown>,
 ): HostSessionModeState | null {
-  const capabilities = record(connected.carrier_capabilities);
-  const acp = record(capabilities?.acp);
-  if (
-    acp?.schema !== ACP_SCHEMA_VERSION
-    || !Array.isArray(acp.client_requests)
-    || !acp.client_requests.includes('session/set_mode')
-  ) return null;
-
   const state = record(connected.session_modes);
   const currentModeId = parsePermissionProfile(state?.currentModeId);
   if (!currentModeId || !Array.isArray(state?.availableModes)) return null;
 
-  const availableModes: SessionMode[] = [];
+  const availableModes: HostSessionMode[] = [];
   const seen = new Set<PermissionProfile>();
   for (const candidate of state.availableModes) {
     const mode = record(candidate);
     const id = parsePermissionProfile(mode?.id);
     if (!id || seen.has(id) || !nonEmpty(mode?.name)) return null;
-    if (
-      mode?.description != null
-      && typeof mode.description !== 'string'
-    ) return null;
+    if (mode.description != null && typeof mode.description !== 'string') return null;
     seen.add(id);
-    availableModes.push({ ...SESSION_MODES[id] });
+    availableModes.push({
+      id,
+      name: mode.name,
+      ...(typeof mode.description === 'string' ? { description: mode.description } : {}),
+    });
   }
-  if (!seen.has(currentModeId)) return null;
-  return { currentModeId, availableModes };
+  return seen.has(currentModeId) ? { currentModeId, availableModes } : null;
 }
 
-export function acpCancelFrame(sessionId: string): Record<string, unknown> {
-  const params: CancelNotification = { sessionId };
-  return {
-    type: 'ACP_NOTIFICATION',
-    acpSchema: ACP_SCHEMA_VERSION,
-    message: {
-      jsonrpc: '2.0',
-      method: 'session/cancel',
-      params,
-    },
-  };
-}
-
-export function acpSetSessionModeFrame(
-  requestId: string,
-  sessionId: string,
-  modeId: PermissionProfile,
-): Record<string, unknown> {
-  const params: SetSessionModeRequest = { sessionId, modeId };
-  return {
-    type: 'ACP_REQUEST',
-    acpSchema: ACP_SCHEMA_VERSION,
-    message: {
-      jsonrpc: '2.0',
-      id: requestId,
-      method: 'session/set_mode',
-      params,
-    },
-  };
-}
-
-/** Return a response only when the complete owned JSON-RPC shape is valid. */
-export function decodeACPSetModeResponse(
-  frame: unknown,
-): ACPSetModeResponse | null {
-  const carrier = record(frame);
-  if (
-    carrier?.type !== 'ACP_RESPONSE'
-    || carrier.acpSchema !== ACP_SCHEMA_VERSION
-    || !nonEmpty(carrier.sessionId)
-  ) return null;
-  const message = record(carrier.message);
-  if (message?.jsonrpc !== '2.0' || !nonEmpty(message.id)) return null;
-
-  const hasResult = Object.prototype.hasOwnProperty.call(message, 'result');
-  const hasError = Object.prototype.hasOwnProperty.call(message, 'error');
-  if (hasResult === hasError) return null;
-  const allowedMessageKeys = new Set([
-    'jsonrpc', 'id', hasResult ? 'result' : 'error',
-  ]);
-  if (Object.keys(message).some((key) => !allowedMessageKeys.has(key))) {
-    return null;
-  }
-  if (hasResult) {
-    const result = record(message.result);
-    if (!result || Object.keys(result).some((key) => key !== '_meta')) {
-      return null;
-    }
-    if (result._meta != null && !record(result._meta)) return null;
-    return {
-      requestId: message.id,
-      sessionId: carrier.sessionId,
-      result: result as SetSessionModeResponse,
-    };
-  }
-
-  const error = record(message.error);
-  if (
-    !error
-    || !Number.isInteger(error.code)
-    || !nonEmpty(error.message)
-  ) return null;
-  return {
-    requestId: message.id,
-    sessionId: carrier.sessionId,
-    error: {
-      code: error.code as number,
-      message: error.message,
-      ...(Object.prototype.hasOwnProperty.call(error, 'data')
-        ? { data: error.data }
-        : {}),
-    },
-  };
-}
-
-/** Extract only correlation identity so malformed owned responses fail fast. */
-export function acpResponseRequestId(frame: unknown): string | null {
-  const carrier = record(frame);
-  if (carrier?.type !== 'ACP_RESPONSE') return null;
-  const message = record(carrier.message);
-  return nonEmpty(message?.id) ? message.id : null;
-}
-
-export function decodeACPPermissionRequest(
-  frame: Record<string, unknown>,
-): ACPPermissionRequest | null {
-  if (
-    frame.type !== 'ACP_REQUEST'
-    || frame.acpSchema !== ACP_SCHEMA_VERSION
-  ) return null;
-  const message = record(frame.message);
-  if (
-    message?.jsonrpc !== '2.0'
-    || message.method !== 'session/request_permission'
-    || !nonEmpty(message.id)
-  ) return null;
-  const params = record(message.params);
-  const toolCall = record(params?.toolCall);
-  if (
-    !nonEmpty(params?.sessionId)
-    || !toolCall
-    || !nonEmpty(toolCall.toolCallId)
-    || !nonEmpty(toolCall.title)
-  ) return null;
-  const rawInput = record(toolCall.rawInput);
-  const options = permissionOptions(params.options);
-  const status = toolStatus(toolCall.status);
-  if (!rawInput || !options?.length || status !== 'pending') return null;
-
-  const request: RequestPermissionRequest = {
-    sessionId: params.sessionId,
-    toolCall: {
-      toolCallId: toolCall.toolCallId,
-      title: toolCall.title,
-      status,
-      rawInput,
-    },
-    options,
-  };
-  return {
-    requestId: message.id,
-    sessionId: request.sessionId,
-    toolCallId: request.toolCall.toolCallId,
-    title: request.toolCall.title!,
-    rawInput,
-    options,
-  };
-}
-
-export function acpPermissionResponseFrame(
-  request: ACPPermissionRequest,
-  approved: boolean,
-  scope: 'once' | 'session',
-  mode: ApprovalRejectMode = 'reject_hard',
-  feedback?: string,
-): Record<string, unknown> {
-  const optionId = approved
-    ? scope === 'session' ? 'allow_session' : 'allow_once'
-    : mode;
-  const advertised = request.options.some(
-    (option) => option.optionId === optionId,
-  );
-  const result: RequestPermissionResponse = advertised
-    ? { outcome: { outcome: 'selected', optionId } }
-    : { outcome: { outcome: 'cancelled' } };
-  if (!approved && advertised && feedback) {
-    result._meta = { connectonion: { feedback } };
-  }
-  return {
-    type: 'ACP_RESPONSE',
-    acpSchema: ACP_SCHEMA_VERSION,
-    sessionId: request.sessionId,
-    message: {
-      jsonrpc: '2.0',
-      id: request.requestId,
-      result,
-    },
-  };
-}
-
-export function acpPermissionCancelledFrame(
-  request: ACPPermissionRequest,
-): Record<string, unknown> {
-  const result: RequestPermissionResponse = {
-    outcome: { outcome: 'cancelled' },
-  };
-  return {
-    type: 'ACP_RESPONSE',
-    acpSchema: ACP_SCHEMA_VERSION,
-    sessionId: request.sessionId,
-    message: {
-      jsonrpc: '2.0',
-      id: request.requestId,
-      result,
-    },
-  };
-}
-
-export function parseServerApprovalMode(
-  value: unknown,
-): PermissionProfile | null {
+export function parseServerApprovalMode(value: unknown): PermissionProfile | null {
   return parsePermissionProfile(value);
 }
 
-export function parsePermissionProfile(
-  value: unknown,
-): PermissionProfile | null {
+export function parsePermissionProfile(value: unknown): PermissionProfile | null {
   return normalizePermissionProfile(value);
 }
 
-/** Decode an authoritative server mode observation, never a policy grant. */
-export function decodeACPModeUpdate(
-  frame: unknown,
-): ACPModeUpdate | null {
-  const carrier = record(frame);
-  if (
-    carrier?.type !== 'ACP_NOTIFICATION'
-    || carrier.acpSchema !== ACP_SCHEMA_VERSION
-  ) return null;
-  const message = record(carrier.message);
-  if (
-    message?.jsonrpc !== '2.0'
-    || message.method !== 'session/update'
-  ) return null;
-  const params = record(message.params);
-  const update = record(params?.update);
-  if (
-    !nonEmpty(params?.sessionId)
-    || update?.sessionUpdate !== 'current_mode_update'
-  ) return null;
-  const mode = parsePermissionProfile(update.currentModeId);
-  if (!mode) return null;
-
-  return {
-    sessionId: params.sessionId,
-    mode,
-  };
-}
-
-/** Decode the stable ACP full-replacement plan update for one session. */
-export function decodeACPPlanUpdate(frame: unknown): ACPPlanUpdate | null {
-  const carrier = record(frame);
-  if (
-    carrier?.type !== 'ACP_NOTIFICATION'
-    || carrier.acpSchema !== ACP_SCHEMA_VERSION
-  ) return null;
-  const message = record(carrier.message);
-  if (
-    message?.jsonrpc !== '2.0'
-    || message.method !== 'session/update'
-  ) return null;
-  const params = record(message.params);
-  const update = record(params?.update);
-  if (!nonEmpty(params?.sessionId) || update?.sessionUpdate !== 'plan') {
-    return null;
-  }
-  const entries = normalizePlanEntries(update.entries);
-  return entries ? { sessionId: params.sessionId, entries } : null;
-}
-
-/** Decode the rolling-upgrade twin emitted by a ConnectOnion Host. */
-export function decodeLegacyPlanUpdate(frame: unknown): ACPPlanUpdate | null {
+/** Decode one full-replacement OIP plan event for a session. */
+export function decodeLegacyPlanUpdate(frame: unknown): OIPPlanUpdate | null {
   const event = record(frame);
   if (event?.type !== 'plan' || !nonEmpty(event.session_id)) return null;
   const entries = normalizePlanEntries(event.entries);
   return entries ? { sessionId: event.session_id, entries } : null;
 }
 
-/**
- * Validate a plan atomically and detach it from untrusted transport/session data.
- * Unknown entry fields are deliberately dropped; one invalid item rejects the
- * whole full-replacement snapshot so a partial plan is never rendered.
- */
+/** Validate a plan atomically and detach it from untrusted wire data. */
 export function normalizePlanEntries(value: unknown): PlanEntry[] | null {
   if (!Array.isArray(value)) return null;
   const entries: PlanEntry[] = [];
@@ -431,10 +95,10 @@ export function normalizePlanEntries(value: unknown): PlanEntry[] | null {
   return entries;
 }
 
+/** Normalize terminal tool results into the existing incremental event shape. */
 export function decodeIncomingEvent(
   event: Record<string, unknown>,
-): Record<string, unknown> | null {
-  if (event.type === 'ACP_NOTIFICATION') return decodeACPFrame(event);
+): Record<string, unknown> {
   if (event.type === 'tool_result') {
     return {
       ...event,
@@ -445,114 +109,6 @@ export function decodeIncomingEvent(
   return event;
 }
 
-function decodeACPFrame(
-  frame: Record<string, unknown>,
-): Record<string, unknown> | null {
-  if (frame.acpSchema !== ACP_SCHEMA_VERSION) return null;
-  const message = record(frame.message);
-  if (message?.jsonrpc !== '2.0' || message.method !== 'session/update') return null;
-  const params = record(message.params);
-  const update = record(params?.update);
-  if (!nonEmpty(params?.sessionId) || !update) return null;
-  const decoded = decodeNativeACPUpdate(update as SessionUpdate);
-  return decoded ? { ...decoded, _acp_session_id: params.sessionId } : null;
-}
-
-/** Decode a native official-SDK update into the existing ChatItem event shape. */
-export function decodeNativeACPUpdate(value: unknown): Record<string, unknown> | null {
-  const candidate = record(value);
-  if (!candidate || !nonEmpty(candidate.sessionUpdate)) return null;
-  const update = candidate as SessionUpdate;
-  if (update.sessionUpdate === 'agent_message_chunk') {
-    if (!nonEmpty(update.messageId)) return null;
-    const content = record(update.content);
-    if (content?.type !== 'text' || !nonEmpty(content.text)) return null;
-    return {
-      type: 'assistant',
-      id: update.messageId,
-      content: content.text,
-    };
-  }
-  if (update.sessionUpdate === 'agent_thought_chunk') {
-    // ACP allows messageId to be omitted, but the ConnectOnion Host profile
-    // dual-writes this update beside a persisted legacy event. Stable identity
-    // is therefore required to make live, compatibility, and replay paths
-    // converge on one ChatItem.
-    if (!nonEmpty(update.messageId)) return null;
-    const content = record(update.content);
-    if (content?.type !== 'text' || !nonEmpty(content.text)) return null;
-    const kind = thoughtKind(update._meta);
-    return {
-      type: 'thinking',
-      id: update.messageId,
-      content: content.text,
-      ...(kind ? { kind } : {}),
-    };
-  }
-  if (update.sessionUpdate === 'tool_call') {
-    if (!nonEmpty(update.toolCallId) || !nonEmpty(update.title)) return null;
-    if (update.status != null && !TOOL_STATUSES.has(String(update.status))) return null;
-    return {
-      type: 'tool_call',
-      tool_id: update.toolCallId,
-      name: update.title,
-      args: record(update.rawInput),
-      status: update.status,
-    };
-  }
-  if (update.sessionUpdate !== 'tool_call_update' || !nonEmpty(update.toolCallId)) {
-    return null;
-  }
-  return {
-    type: 'tool_call_update',
-    tool_id: update.toolCallId,
-    name: update.title,
-    args: record(update.rawInput),
-    status: update.status,
-    result: toolResultText(update),
-    timing_ms: timingMs(update._meta),
-  };
-}
-
-/** Decode native mode state without treating unknown identifiers as authority. */
-export function normalizeNativeSessionModeState(
-  value: unknown,
-): HostSessionModeState | null {
-  const state = record(value);
-  const currentModeId = parsePermissionProfile(state?.currentModeId);
-  if (!currentModeId || !Array.isArray(state?.availableModes)) return null;
-  const availableModes: SessionMode[] = [];
-  const seen = new Set<PermissionProfile>();
-  for (const candidate of state.availableModes) {
-    const mode = record(candidate);
-    const id = parsePermissionProfile(mode?.id);
-    if (!id || seen.has(id) || !nonEmpty(mode?.name)) return null;
-    if (mode.description != null && typeof mode.description !== 'string') return null;
-    seen.add(id);
-    availableModes.push({ ...SESSION_MODES[id] });
-  }
-  return seen.has(currentModeId) ? { currentModeId, availableModes } : null;
-}
-
-function toolResultText(update: Extract<SessionUpdate, { sessionUpdate: 'tool_call_update' }>): string | undefined {
-  const texts = update.content?.flatMap((item) => {
-    if (item.type !== 'content' || item.content.type !== 'text') return [];
-    return [item.content.text];
-  });
-  if (texts?.length) return texts.join('\n');
-  return typeof update.rawOutput === 'string' ? update.rawOutput : undefined;
-}
-
-function timingMs(value: unknown): number | undefined {
-  const timing = record(record(value)?.connectonion)?.timingMs;
-  return typeof timing === 'number' ? timing : undefined;
-}
-
-function thoughtKind(value: unknown): string | undefined {
-  const kind = record(record(value)?.connectonion)?.kind;
-  return nonEmpty(kind) ? kind : undefined;
-}
-
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -561,33 +117,4 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 function nonEmpty(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
-}
-
-function permissionOptions(value: unknown): PermissionOption[] | null {
-  if (!Array.isArray(value)) return null;
-  const options: PermissionOption[] = [];
-  const seen = new Set<string>();
-  for (const candidate of value) {
-    const option = record(candidate);
-    if (!option) return null;
-
-    const optionId = option.optionId;
-    if (!nonEmpty(optionId) || !nonEmpty(option.name)) return null;
-
-    const expectedKind = HOST_PERMISSION_KINDS.get(optionId);
-    if (!expectedKind || option.kind !== expectedKind || seen.has(optionId)) return null;
-    seen.add(optionId);
-    options.push({
-      optionId,
-      name: option.name,
-      kind: expectedKind,
-    });
-  }
-  return options;
-}
-
-function toolStatus(value: unknown): ToolCallStatus | null {
-  return typeof value === 'string' && TOOL_STATUSES.has(value)
-    ? value as ToolCallStatus
-    : null;
 }

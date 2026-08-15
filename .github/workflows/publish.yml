@@ -94,7 +94,6 @@ jobs:
           npm init -y >/dev/null
           npm install react react-dom "$GITHUB_WORKSPACE/${{ steps.pack.outputs.tarball }}"
           node -e "require('@connectonion/react')"
-          node --input-type=module -e "await import('@connectonion/react/experimental/native-acp')"
 
       - name: Preserve the exact release artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

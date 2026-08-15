@@ -10,9 +10,6 @@ import { RemoteAgent } from './remote-agent';
 
 export * from './types';
 export type {
-  ACPNotificationFrame,
-  ACPPermissionRequest,
-  ACPPlanUpdate,
   HostSessionModeState,
   ApprovalRejectMode,
 } from './wire-events';
