@@ -133,6 +133,8 @@ export class RemoteAgent {
   private _inputResolve: ((value: Response) => void) | null = null;
   private _inputReject: ((reason?: unknown) => void) | null = null;
   private _inputTimer: ReturnType<typeof setTimeout> | null = null;
+  private _pendingInputMessage: Record<string, unknown> | null = null;
+  private _authenticationRecoveryAttempted = false;
 
   // PING/PONG health check
   private _lastActivityTime = 0;
@@ -279,6 +281,8 @@ export class RemoteAgent {
     if (!isDirect) msg.to = this.address;
 
     try {
+      this._pendingInputMessage = msg;
+      this._authenticationRecoveryAttempted = false;
       this._sendAuthenticated(msg);
     } catch (cause) {
       const error = cause instanceof Error ? cause : new Error(String(cause));
@@ -1200,6 +1204,8 @@ export class RemoteAgent {
 
       // Don't close WS — keep it for next input()
       const resolve = this._inputResolve;
+      this._pendingInputMessage = null;
+      this._authenticationRecoveryAttempted = false;
       this._settleInput();
       resolve?.({ text: result, done: true });
     }
@@ -1231,7 +1237,18 @@ export class RemoteAgent {
     // out. `default: deny` is what `strict` ships, so that was the first
     // experience of every correctly configured agent meeting a new client. #434.
     if (data?.type === 'ERROR') {
-      const err = new Error(`Agent error: ${String(data.message || data.error || 'Unknown error')}`);
+      const message = String(data.message || data.error || 'Unknown error');
+      if (
+        /authenticate first \(send CONNECT\)/i.test(message)
+        && this._pendingInputMessage
+        && !this._authenticationRecoveryAttempted
+      ) {
+        this._authenticationRecoveryAttempted = true;
+        this._recoverAuthenticationAndRetry(this._pendingInputMessage);
+        return;
+      }
+
+      const err = new Error(`Agent error: ${message}`);
       const pendingProfile = this._pendingPermissionProfileChange;
       if (pendingProfile) this._rejectPermissionProfileChange(pendingProfile, err);
       const onboarding = this._status === 'waiting';
@@ -1250,6 +1267,8 @@ export class RemoteAgent {
       if (this._connectReject && !onboarding) this._settleConnect(err);
       if (!onboarding) this._status = 'idle';
       const reject = this._inputReject;
+      this._pendingInputMessage = null;
+      this._authenticationRecoveryAttempted = false;
       this._settleInput();
       reject?.(err);
     }
@@ -1375,6 +1394,31 @@ export class RemoteAgent {
     if (this._inputTimer) { clearTimeout(this._inputTimer); this._inputTimer = null; }
     this._inputResolve = null;
     this._inputReject = null;
+  }
+
+  private _recoverAuthenticationAndRetry(message: Record<string, unknown>): void {
+    const connectionEpoch = this._connectionEpoch;
+    this._closeWs();
+    this._error = null;
+    this._status = 'working';
+    this._onMessage?.();
+
+    void this._ensureConnected().then(() => {
+      if (connectionEpoch !== this._connectionEpoch) return;
+      this._sendAuthenticated(message);
+    }).catch((cause) => {
+      if (connectionEpoch !== this._connectionEpoch) return;
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      this._error = error;
+      this._clearPlaceholder();
+      this._status = 'idle';
+      this._pendingInputMessage = null;
+      this._authenticationRecoveryAttempted = false;
+      const reject = this._inputReject;
+      this._settleInput();
+      reject?.(error);
+      this._onMessage?.();
+    });
   }
 
   private _closeWs(): void {

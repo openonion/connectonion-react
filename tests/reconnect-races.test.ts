@@ -12,16 +12,18 @@ class FakeSocket {
   readyState = 0;
   closeCalls = 0;
   sendCalls = 0;
+  sent: string[] = [];
 
   constructor(_url = '') {
     FakeSocket.instances.push(this);
   }
 
-  send(): void {
+  send(data = ''): void {
     this.sendCalls += 1;
     if (this.readyState !== 1) {
       throw new Error('raw WebSocket InvalidStateError');
     }
+    this.sent.push(data);
   }
 
   close(): void {
@@ -121,6 +123,55 @@ describe('RemoteAgent reconnect races', () => {
     agent.reset();
     void connecting;
     void reconnecting;
+  });
+
+  test('an input rejected before Host auth reconnects and is sent exactly once', async () => {
+    const agent = remoteAgent();
+    const staleSocket = new FakeSocket();
+    staleSocket.readyState = 1;
+    agent._ws = staleSocket;
+    agent._authenticated = true;
+    agent._connectionState = 'connected';
+
+    const response = agent.input('inspect the repo');
+    await Promise.resolve();
+    expect(staleSocket.sent.map((frame) => JSON.parse(frame))).toEqual([
+      expect.objectContaining({ type: 'INPUT', prompt: 'inspect the repo' }),
+    ]);
+
+    agent._handleMessage({
+      data: JSON.stringify({ type: 'ERROR', message: 'authenticate first (send CONNECT)' }),
+    });
+    await settleSigner();
+
+    const recoveredSocket = FakeSocket.instances[FakeSocket.instances.length - 1] as any;
+    expect(recoveredSocket).not.toBe(staleSocket);
+    recoveredSocket.readyState = 1;
+    recoveredSocket.onopen?.({});
+    await settleSigner();
+    expect(recoveredSocket.sent.map((frame: string) => JSON.parse(frame))).toEqual([
+      expect.objectContaining({ type: 'CONNECT' }),
+    ]);
+
+    recoveredSocket.onmessage?.({
+      data: JSON.stringify({
+        type: 'CONNECTED',
+        protocol: { name: 'oip', version: '0.1' },
+        session_id: SESSION_ID,
+        status: 'new',
+      }),
+    });
+    await settleSigner();
+    expect(recoveredSocket.sent.map((frame: string) => JSON.parse(frame))).toEqual([
+      expect.objectContaining({ type: 'CONNECT' }),
+      expect.objectContaining({ type: 'INPUT', prompt: 'inspect the repo' }),
+    ]);
+
+    recoveredSocket.onmessage?.({
+      data: JSON.stringify({ type: 'OUTPUT', result: 'README.md' }),
+    });
+    await expect(response).resolves.toEqual({ text: 'README.md', done: true });
+    expect(agent.ui.filter((item: { type: string }) => item.type === 'user')).toHaveLength(1);
   });
 
   test('eager connect shares an in-flight hydration reconnect', async () => {
