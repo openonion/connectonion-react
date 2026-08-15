@@ -5,7 +5,7 @@
  *   State/Effects: mutates chatItems array in-place (push via addItem, update existing entries)
  *   Integration: called by handlers.ts for stream event types (tool_call, llm_call, etc.)
  */
-import { ChatItem, ChatItemType } from './types';
+import { ChatItem, ChatItemType, TokenUsage } from './types';
 import { decodeIncomingEvent } from './wire-events';
 
 const SUCCESSFUL_TOOL_RESULTS = new Set(['success', 'done', 'completed']);
@@ -184,11 +184,7 @@ export function mapEventToChatItem(
         if (typeof event.duration_ms === 'number') existingThinking.duration_ms = event.duration_ms;
         if (event.model) existingThinking.model = event.model as string;
         if (event.usage) {
-          existingThinking.usage = event.usage as {
-            input_tokens?: number; output_tokens?: number;
-            prompt_tokens?: number; completion_tokens?: number;
-            total_tokens?: number; cost?: number;
-          };
+          existingThinking.usage = event.usage as TokenUsage;
         }
         if (typeof event.context_percent === 'number') existingThinking.context_percent = event.context_percent;
       }
