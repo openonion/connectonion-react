@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.2-alpha.14 — 2026-08-17
+
+Truthful stop requests for native Codex and Claude Code Work Rooms.
+
+### Fixed
+
+- Make `interruptProvider()` send a request-scoped `PROVIDER_INTERRUPT` frame
+  and resolve only after the Host acknowledges that exact invocation.
+- Reject a stop request on a Host refusal, invalid request, timeout, reset, or
+  connection loss, so consumers can restore a clear retry action instead of
+  being stuck in an optimistic stopping state.
+- Keep the provider's terminal lifecycle event as the only authoritative
+  completion/cancellation signal; an acknowledgement says only that delivery
+  was accepted.
+
+### Release boundary
+
+- This remains an OIP-only protocol addition with a bounded legacy fallback for
+  a rolling Host deployment.
+- Publish under the npm `alpha` dist-tag; stable `latest` remains `0.4.1`.
+- O Chat must pin `0.4.2-alpha.14` exactly and verify accepted and rejected
+  Stop requests in a long native-provider Work Room.
+
 ## 0.4.2-alpha.10 — 2026-08-16
 
 Rolling-deployment fix for OIP endpoint discovery.
