@@ -94,6 +94,24 @@ function approvalRejectMode(value: unknown): ApprovalRejectMode {
     : 'reject_hard';
 }
 
+function providerApprovalContext(data: Record<string, unknown>) {
+  const provider = data.provider;
+  const invocationId = data.invocationId;
+  const parentToolCallId = data.parentToolCallId;
+  const activityId = data.activityId;
+  if (
+    (provider !== 'codex' && provider !== 'claude_code')
+    || typeof invocationId !== 'string' || !invocationId
+    || typeof parentToolCallId !== 'string' || !parentToolCallId
+  ) return {};
+  return {
+    provider,
+    providerInvocationId: invocationId,
+    parentToolCallId,
+    ...(typeof activityId === 'string' && activityId && { activityId }),
+  };
+}
+
 export class RemoteAgent {
   readonly address: string;
 
@@ -1117,6 +1135,7 @@ export class RemoteAgent {
         arguments: data.arguments as Record<string, unknown>,
         ...(data.description && { description: data.description as string }),
         ...(data.batch_remaining && { batch_remaining: data.batch_remaining as Array<{ tool: string; arguments: string }> }),
+        ...providerApprovalContext(data),
       });
     }
 
