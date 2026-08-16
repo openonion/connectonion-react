@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.4.2-alpha.10 — 2026-08-16
+
+Rolling-deployment fix for OIP endpoint discovery.
+
+### Fixed
+
+- Opt every Relay agent lookup and direct `/info` probe out of the browser HTTP
+  cache, complementing the Host's `Cache-Control: no-store` response header.
+- Prevent a stale endpoint or protocol descriptor from being replayed after a
+  frontend or Host deployment and driving a client into a reconnect loop.
+- Cover all four discovery calls used by `resolveEndpoint()` and
+  `fetchAgentInfo()` with exact request-option assertions.
+
+### Release boundary
+
+- This is a reader-first, additive client change and remains compatible with
+  descriptor-less OIP 0.1 Hosts during the bounded rolling window.
+- Publish under the npm `alpha` dist-tag; stable `latest` remains `0.4.1`.
+- O Chat must pin `0.4.2-alpha.10` exactly before the next Host preview and can
+  roll back to `0.4.2-alpha.9` without changing the OIP 0.1 wire contract.
+
 ## 0.4.2-alpha.7 — 2026-08-16
 
 Production recovery for relay sessions whose browser socket remains open after
