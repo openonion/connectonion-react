@@ -18,12 +18,24 @@ export interface Response {
 
 export type ProviderInvocationStatus = 'starting' | 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled';
 
+/** Safe semantic categories shared by the native Codex and Claude Code adapters. */
+export type ProviderActivityKind = 'command' | 'file_change' | 'inspect' | 'search' | 'tool';
+
 export interface ProviderActivity {
   id: string;
-  name: string;
+  /** Present for the old generic tool fallback only. */
+  name?: string;
   args?: Record<string, unknown>;
   status: 'running' | 'done' | 'error';
   result?: string;
+  /** Stable provider order; present for typed OIP activity events. */
+  sequence?: number;
+  kind?: ProviderActivityKind;
+  title?: string;
+  summary?: string;
+  files?: string[];
+  /** Generic correlated tools from an older Host are never verified evidence. */
+  legacy?: boolean;
 }
 
 export interface ProviderInvocationItem {
@@ -32,12 +44,19 @@ export interface ProviderInvocationItem {
   parentToolCallId: string;
   provider: 'codex' | 'claude_code';
   providerDisplayName: string;
+  /** Safe provider-generated task category. Preferred over legacy taskSummary. */
+  taskTitle?: string;
   taskSummary?: string;
+  /** Safe current state, never raw provider output. */
+  currentSummary?: string;
   permissionMode?: 'manual' | 'auto_approve' | 'full_access';
   status: ProviderInvocationStatus;
   activities: ProviderActivity[];
   sessionId?: string;
   elapsedMs?: number;
+  /** Safe terminal outcome. Preferred over legacy result/error fields. */
+  resultSummary?: string;
+  errorSummary?: string;
   result?: string;
   error?: string;
 }
@@ -52,6 +71,19 @@ export interface ProviderApprovalContext {
   providerInvocationId?: string;
   parentToolCallId?: string;
   activityId?: string;
+  /** Safe Core-authored copy for the decision surface; not an authority token. */
+  providerApproval?: ProviderApprovalPresentation;
+}
+
+/** Verified provider approval scope, kept separate from raw legacy arguments. */
+export interface ProviderApprovalPresentation {
+  action: string;
+  scope: string;
+  reason: string;
+  scopeClassification: 'workroom' | 'elevated' | 'unknown';
+  allowOnce: boolean;
+  allowSession: boolean;
+  files?: string[];
 }
 
 export type ChatItemType = 'user' | 'agent' | 'thinking' | 'tool_call' | 'provider_invocation' | 'ask_user' | 'approval_needed' | 'onboard_required' | 'onboard_success' | 'intent' | 'eval' | 'compact' | 'tool_blocked' | 'full_access_checkpoint' | 'plan_review' | 'files_received';
