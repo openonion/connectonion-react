@@ -6,6 +6,7 @@ export type {
   ProviderInvocationItem,
   ProviderInvocationStatus,
   ProviderActivity,
+  ProviderApprovalContext,
   FileAttachment,
   AgentStatus,
   ConnectionState,

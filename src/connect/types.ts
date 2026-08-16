@@ -42,6 +42,18 @@ export interface ProviderInvocationItem {
   error?: string;
 }
 
+/**
+ * Safe presentation-only correlation emitted when a native coding provider
+ * asks for permission from inside an outer agent tool call.  This is not an
+ * authority token: the Host still binds the answer to its one live request.
+ */
+export interface ProviderApprovalContext {
+  provider?: 'codex' | 'claude_code';
+  providerInvocationId?: string;
+  parentToolCallId?: string;
+  activityId?: string;
+}
+
 export type ChatItemType = 'user' | 'agent' | 'thinking' | 'tool_call' | 'provider_invocation' | 'ask_user' | 'approval_needed' | 'onboard_required' | 'onboard_success' | 'intent' | 'eval' | 'compact' | 'tool_blocked' | 'full_access_checkpoint' | 'plan_review' | 'files_received';
 
 export interface AskUserField {
@@ -60,7 +72,7 @@ export type ChatItem =
   | { id: string; type: 'tool_call'; name: string; args?: Record<string, unknown>; status: 'running' | 'done' | 'error'; result?: string; timing_ms?: number }
   | ProviderInvocationItem
   | { id: string; type: 'ask_user'; text: string; options: string[]; multi_select: boolean; input_type?: string; fields?: AskUserField[]; answered?: boolean; answer?: string }
-  | { id: string; type: 'approval_needed'; tool: string; arguments: Record<string, unknown>; description?: string; batch_remaining?: Array<{ tool: string; arguments: string }>; answered?: boolean }
+  | ({ id: string; type: 'approval_needed'; tool: string; arguments: Record<string, unknown>; description?: string; batch_remaining?: Array<{ tool: string; arguments: string }>; answered?: boolean } & ProviderApprovalContext)
   | { id: string; type: 'onboard_required'; methods: string[]; paymentAmount?: number; paymentAddress?: string }
   | { id: string; type: 'onboard_success'; level: string; message: string }
   | { id: string; type: 'intent'; status: 'analyzing' | 'understood'; ack?: string; is_build?: boolean }
