@@ -2,12 +2,12 @@
  * @jest-environment jsdom
  *
  * Next can evaluate the React package in more than one route bundle. Both copies
- * must lease the same RemoteAgent from the page's window, even when a registry
+ * must lease the same RemoteAgent from the page's document, even when a registry
  * Map was created by another JavaScript realm.
  */
 
 const ADDR = '0x' + 'b'.repeat(64);
-const REGISTRY_KEY = '__connectonionReactLiveAgentRegistryV2__';
+const REGISTRY_KEY = '__connectonionReactLiveAgentRegistryV3__';
 
 test('isolated browser bundles share a foreign-realm live-agent registry', () => {
   const backing = new Map<string, unknown>();
@@ -20,8 +20,12 @@ test('isolated browser bundles share a foreign-realm live-agent registry', () =>
     clear: backing.clear.bind(backing),
     get size() { return backing.size; },
   };
-  Object.defineProperty(window, REGISTRY_KEY, {
-    value: { version: 2, liveAgents: foreignRealmMap },
+  Object.defineProperty(document, REGISTRY_KEY, {
+    value: { version: 3, liveAgents: foreignRealmMap },
+    configurable: true,
+  });
+  Object.defineProperty(window, '__connectonionReactLiveAgentRegistryV2__', {
+    value: { version: 2, liveAgents: new Map() },
     configurable: true,
   });
   const legacyKey = Symbol.for('@connectonion/react.live-agent-registry.v1');
@@ -45,6 +49,7 @@ test('isolated browser bundles share a foreign-realm live-agent registry', () =>
   expect(second).toBe(first);
 
   firstModule._clearAgentCache();
-  delete (window as unknown as Record<string, unknown>)[REGISTRY_KEY];
+  delete (document as unknown as Record<string, unknown>)[REGISTRY_KEY];
+  delete (window as unknown as Record<string, unknown>).__connectonionReactLiveAgentRegistryV2__;
   delete (window as unknown as Record<PropertyKey, unknown>)[legacyKey];
 });

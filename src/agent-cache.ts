@@ -22,7 +22,7 @@ type LiveAgentMap = Pick<
 >;
 
 interface AgentRegistry {
-  version: 2;
+  version: 3;
   liveAgents: LiveAgentMap;
 }
 
@@ -30,8 +30,8 @@ interface AgentRegistry {
 // it only bounds a runaway (visiting dozens of sessions) so connections don't leak.
 export const MAX_LIVE_AGENTS = 6;
 
-const REGISTRY_VERSION = 2;
-const REGISTRY_KEY = '__connectonionReactLiveAgentRegistryV2__';
+const REGISTRY_VERSION = 3;
+const REGISTRY_KEY = '__connectonionReactLiveAgentRegistryV3__';
 const moduleLiveAgents = new Map<string, Agent>();
 
 function isAgentRegistry(value: unknown): value is AgentRegistry {
@@ -49,31 +49,30 @@ function isAgentRegistry(value: unknown): value is AgentRegistry {
 }
 
 /**
- * Share connections between browser bundles evaluated in the same realm. Next.js can
- * evaluate this module once per Turbopack route; a realm-owned registry lets those
- * copies reuse the same session lease. Server renders remain request/module local.
+ * Share connections between browser bundles evaluated in the same page. Next.js can
+ * evaluate this module once per Turbopack route. The page Document is the stable
+ * browser-owned object those chunks demonstrably share; `window` and `globalThis`
+ * can be module-runtime wrappers. Server renders remain request/module local.
  */
 function getLiveAgents(): LiveAgentMap {
-  if (typeof window === 'undefined') return moduleLiveAgents;
+  if (typeof document === 'undefined') return moduleLiveAgents;
 
-  // Use the page Window explicitly. In a bundled browser app `globalThis` can be
-  // wrapped by a module runtime, while every route chunk still shares `window`.
-  // Version 1 also rejected a perfectly usable Map created by another realm
-  // because `instanceof Map` is realm-bound; the v2 key leaves that poisoned,
-  // non-configurable registry behind and validates the Map contract instead.
-  const realm = window as unknown as Record<string, unknown>;
-  const existing = Object.getOwnPropertyDescriptor(realm, REGISTRY_KEY);
+  // Version 1 rejected foreign-realm Maps. Version 2 still anchored ownership to
+  // `window`, which Turbopack can wrap per route even though the DOM is shared.
+  // A new key on Document avoids both poisoned, non-configurable predecessors.
+  const page = document as unknown as Record<string, unknown>;
+  const existing = Object.getOwnPropertyDescriptor(page, REGISTRY_KEY);
   if (existing) {
     return isAgentRegistry(existing.value) ? existing.value.liveAgents : moduleLiveAgents;
   }
-  if (!Object.isExtensible(realm)) return moduleLiveAgents;
+  if (!Object.isExtensible(page)) return moduleLiveAgents;
 
   const registry: AgentRegistry = {
     version: REGISTRY_VERSION,
     liveAgents: new Map<string, Agent>(),
   };
 
-  Object.defineProperty(realm, REGISTRY_KEY, {
+  Object.defineProperty(page, REGISTRY_KEY, {
     value: registry,
     enumerable: false,
     configurable: false,
