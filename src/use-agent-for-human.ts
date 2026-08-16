@@ -166,8 +166,8 @@ export interface UseAgentForHumanReturn {
   /** Stop the current OIP turn. */
   interrupt: () => void;
 
-  /** Stop one exact native Codex/Claude provider invocation. */
-  interruptProvider: (invocationId: string) => void;
+  /** Stop one exact native Codex/Claude provider invocation after Host acknowledgement. */
+  interruptProvider: (invocationId: string) => Promise<void>;
 
   /** Sign an onboard payload asynchronously. Pass the resolved result to sendMessage(). */
   signOnboard: (options: { inviteCode?: string; payment?: number }) => Promise<OutgoingMessage>;

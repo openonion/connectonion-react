@@ -81,18 +81,37 @@ interface PendingPermissionProfileChange {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface PendingProviderInterrupt {
+  requestId: string;
+  invocationId: string;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 interface ReconnectReadyWaiter {
   resolve: () => void;
   reject: (error: Error) => void;
 }
 
 const PERMISSION_PROFILE_CHANGE_TIMEOUT_MS = 30000;
+const PROVIDER_INTERRUPT_ACK_TIMEOUT_MS = 10000;
 const WEBSOCKET_OPEN = 1;
 
 function approvalRejectMode(value: unknown): ApprovalRejectMode {
   return value === 'reject_soft' || value === 'reject_explain'
     ? value
     : 'reject_hard';
+}
+
+function providerInterruptError(reason: unknown): Error {
+  if (reason === 'not_active') {
+    return new Error('The provider run is no longer active. Try again.');
+  }
+  if (reason === 'invalid_request') {
+    return new Error('The stop request was invalid. Try again.');
+  }
+  return new Error('The Host rejected the stop request. Try again.');
 }
 
 function providerApprovalContext(data: Record<string, unknown>) {
@@ -223,6 +242,7 @@ export class RemoteAgent {
   private _authenticated = false;
   private _permissionProfileState: HostSessionModeState | null = null;
   private _interruptSent = false;
+  private _pendingProviderInterrupt: PendingProviderInterrupt | null = null;
 
   // Promise resolution for current input() call
   private _inputResolve: ((value: Response) => void) | null = null;
@@ -520,7 +540,12 @@ export class RemoteAgent {
       return;
     }
     if (message.type === 'PROVIDER_INTERRUPT') {
-      this.interruptProvider(typeof message.invocationId === 'string' ? message.invocationId : '');
+      // `send()` predates the acknowledged provider-stop API. Keep its
+      // fire-and-forget shape for compatibility while preventing a rejected
+      // Promise from becoming an unhandled browser error.
+      void this.interruptProvider(
+        typeof message.invocationId === 'string' ? message.invocationId : '',
+      ).catch(() => {});
       return;
     }
     if (message.type === 'ONBOARD_SUBMIT') {
@@ -588,10 +613,65 @@ export class RemoteAgent {
     this._interruptSent = true;
   }
 
-  /** Stop one native provider run without cancelling the enclosing OIP turn. */
-  interruptProvider(invocationId: string): void {
-    if (!invocationId || invocationId.length > 512) return;
-    this._sendAuthenticated({ type: 'PROVIDER_INTERRUPT', invocationId });
+  /**
+   * Ask the Host to stop one native provider run without cancelling the
+   * enclosing OIP turn. Resolution means the Host accepted this exact target;
+   * the later terminal provider event remains the authoritative stopped state.
+   */
+  interruptProvider(invocationId: string): Promise<void> {
+    if (!invocationId || invocationId.length > 512) {
+      return Promise.reject(new Error('A valid provider run is required to stop it.'));
+    }
+    if (this._pendingProviderInterrupt) {
+      return Promise.reject(new Error('A provider stop request is already pending.'));
+    }
+
+    const requestId = generateUUID();
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const pending = this._pendingProviderInterrupt;
+        if (pending?.requestId !== requestId) return;
+        this._rejectProviderInterrupt(
+          pending,
+          new Error('The Host did not confirm the stop request. You can try again.'),
+        );
+      }, PROVIDER_INTERRUPT_ACK_TIMEOUT_MS);
+      const pending: PendingProviderInterrupt = {
+        requestId,
+        invocationId,
+        resolve,
+        reject,
+        timer,
+      };
+      this._pendingProviderInterrupt = pending;
+      try {
+        this._sendAuthenticated({ type: 'PROVIDER_INTERRUPT', invocationId, requestId });
+      } catch (cause) {
+        this._rejectProviderInterrupt(
+          pending,
+          cause instanceof Error ? cause : new Error(String(cause)),
+        );
+      }
+    });
+  }
+
+  private _resolveProviderInterrupt(pending: PendingProviderInterrupt): void {
+    if (this._pendingProviderInterrupt !== pending) return;
+    clearTimeout(pending.timer);
+    this._pendingProviderInterrupt = null;
+    pending.resolve();
+    this._onMessage?.();
+  }
+
+  private _rejectProviderInterrupt(
+    pending: PendingProviderInterrupt,
+    error: Error,
+  ): void {
+    if (this._pendingProviderInterrupt !== pending) return;
+    clearTimeout(pending.timer);
+    this._pendingProviderInterrupt = null;
+    pending.reject(error);
+    this._onMessage?.();
   }
 
   private _sendPendingApproval(
@@ -829,6 +909,12 @@ export class RemoteAgent {
 
   reset(): void {
     const resetError = new Error('Connection reset');
+    if (this._pendingProviderInterrupt) {
+      this._rejectProviderInterrupt(
+        this._pendingProviderInterrupt,
+        new Error('Connection reset before the stop request was acknowledged.'),
+      );
+    }
     this._connectionEpoch += 1;
     this._connecting = null;
     const reject = this._inputReject;
@@ -1084,6 +1170,21 @@ export class RemoteAgent {
     // PING/PONG keepalive — PING also covers idle periods with no other traffic.
     if (data?.type === 'PING') {
       this._ws?.send(JSON.stringify({ type: 'PONG' }));
+      return;
+    }
+
+    if (data?.type === 'PROVIDER_INTERRUPT_ACK') {
+      const pending = this._pendingProviderInterrupt;
+      if (
+        !pending
+        || data.requestId !== pending.requestId
+        || data.invocationId !== pending.invocationId
+      ) return;
+      if (data.accepted === true) {
+        this._resolveProviderInterrupt(pending);
+      } else {
+        this._rejectProviderInterrupt(pending, providerInterruptError(data.reason));
+      }
       return;
     }
 
@@ -1402,6 +1503,17 @@ export class RemoteAgent {
     // experience of every correctly configured agent meeting a new client. #434.
     if (data?.type === 'ERROR') {
       const message = String(data.message || data.error || 'Unknown error');
+      // Pre-ack Hosts reported a rejected provider stop as a generic ERROR.
+      // Preserve a retryable scoped action during a rolling upgrade instead of
+      // treating that one failed Stop as a failed enclosing conversation.
+      const pendingProviderInterrupt = this._pendingProviderInterrupt;
+      if (pendingProviderInterrupt && /provider stop requires/i.test(message)) {
+        this._rejectProviderInterrupt(
+          pendingProviderInterrupt,
+          providerInterruptError('not_active'),
+        );
+        return;
+      }
       if (
         /authenticate first \(send CONNECT\)/i.test(message)
         && this._pendingInputMessage
@@ -1485,6 +1597,13 @@ export class RemoteAgent {
     this._permissionProfileState = null;
     this._stopPingMonitor();
     this._settleSessionStatusWaiters('not_found');
+
+    if (this._pendingProviderInterrupt) {
+      this._rejectProviderInterrupt(
+        this._pendingProviderInterrupt,
+        new Error('Connection closed before the stop request was acknowledged.'),
+      );
+    }
 
     if (this._pendingPermissionProfileChange) {
       this._rejectPermissionProfileChange(
@@ -1595,6 +1714,12 @@ export class RemoteAgent {
       this._rejectPermissionProfileChange(
         this._pendingPermissionProfileChange,
         new Error('Connection closed before permission profile acknowledgement'),
+      );
+    }
+    if (this._pendingProviderInterrupt) {
+      this._rejectProviderInterrupt(
+        this._pendingProviderInterrupt,
+        new Error('Connection closed before the stop request was acknowledged.'),
       );
     }
     if (this._ws) {

@@ -166,16 +166,49 @@ test('forwards safe provider activity through the live RemoteAgent dispatcher', 
   }));
 });
 
-test('sends a scoped provider interrupt without using the global turn interrupt', () => {
+test('resolves a scoped provider stop only after its Host acknowledgement', async () => {
   const agent = new RemoteAgent('0x' + 'a'.repeat(64), {}) as any;
   const socket = new FakeSocket();
   agent._ws = socket;
   agent._authenticated = true;
 
-  agent.interruptProvider('codex:outer-call');
+  const stopped = agent.interruptProvider('codex:outer-call');
+  const request = JSON.parse(socket.sent[0]);
 
-  expect(socket.sent).toEqual([
-    JSON.stringify({ type: 'PROVIDER_INTERRUPT', invocationId: 'codex:outer-call' }),
-  ]);
+  expect(request).toEqual(expect.objectContaining({
+    type: 'PROVIDER_INTERRUPT',
+    invocationId: 'codex:outer-call',
+    requestId: expect.any(String),
+  }));
   expect(agent._interruptSent).toBe(false);
+
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'PROVIDER_INTERRUPT_ACK',
+    requestId: request.requestId,
+    invocationId: 'codex:outer-call',
+    accepted: true,
+  }) });
+
+  await expect(stopped).resolves.toBeUndefined();
+  expect(agent._pendingProviderInterrupt).toBeNull();
+});
+
+test('returns a retryable failure when the Host rejects a scoped provider stop', async () => {
+  const agent = new RemoteAgent('0x' + 'a'.repeat(64), {}) as any;
+  const socket = new FakeSocket();
+  agent._ws = socket;
+  agent._authenticated = true;
+
+  const stopped = agent.interruptProvider('codex:outer-call');
+  const request = JSON.parse(socket.sent[0]);
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'PROVIDER_INTERRUPT_ACK',
+    requestId: request.requestId,
+    invocationId: 'codex:outer-call',
+    accepted: false,
+    reason: 'not_active',
+  }) });
+
+  await expect(stopped).rejects.toThrow('The provider run is no longer active. Try again.');
+  expect(agent._pendingProviderInterrupt).toBeNull();
 });
