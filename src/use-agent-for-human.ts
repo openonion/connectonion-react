@@ -20,6 +20,7 @@ import {
   HostSessionModeState,
   RemoteSessionStatus,
   PermissionProfile,
+  ExecutionProfile,
 } from './connect';
 import { acquireAgent, dropAgent } from './agent-cache';
 import { getStore, type Message } from './store';
@@ -98,11 +99,20 @@ export interface UseAgentForHumanReturn {
   /** Current Host-enforced Codex permission profile. */
   permissionProfile: PermissionProfile;
 
+  /** Product-facing Default / Safe / Full access profile from authenticated Host state. */
+  executionProfile: ExecutionProfile;
+
   /** @deprecated Use availablePermissionProfiles. */
   availableModes: ReadonlyArray<HostSessionModeState['availableModes'][number]>;
 
   /** Server-authorized permission profiles. */
   availablePermissionProfiles: ReadonlyArray<HostSessionModeState['availableModes'][number]>;
+
+  /** Host-advertised product profiles with exact wire mappings and policy metadata. */
+  availableExecutionProfiles: ReadonlyArray<HostSessionModeState['availableModes'][number]>;
+
+  /** Versioned policy advertised by the authenticated Host, or null for a legacy Host. */
+  approvalPolicy: HostSessionModeState['policy'];
 
   /** @deprecated Use permissionProfileChangePending. */
   modeChangePending: boolean;
@@ -171,6 +181,9 @@ export interface UseAgentForHumanReturn {
 
   /** Persist one permission profile and resolve only after Host confirmation. */
   setPermissionProfile: (profile: PermissionProfile) => Promise<void>;
+
+  /** Change the product execution profile through the Host-acknowledged transaction. */
+  setExecutionProfile: (profile: ExecutionProfile) => Promise<void>;
 
   /** @deprecated Use setPermissionProfile. */
   setSessionMode: (mode: PermissionProfile) => Promise<void>;
@@ -475,6 +488,11 @@ export function useAgentForHuman(
     await agent.setPermissionProfile(newMode);
     setError(null);
   };
+  const setExecutionProfile = async (profile: ExecutionProfile) => {
+    setError(null);
+    await agent.setExecutionProfile(profile);
+    setError(null);
+  };
 
   const setSessionMode = setPermissionProfile;
 
@@ -494,8 +512,11 @@ export function useAgentForHuman(
       : session?.mode || ':read-only',
     collaborationMode: session?.collaboration_mode || 'default',
     permissionProfile: session?.mode || ':read-only',
+    executionProfile: agent.executionProfile,
     availableModes: availablePermissionProfiles,
     availablePermissionProfiles,
+    availableExecutionProfiles: availablePermissionProfiles,
+    approvalPolicy: agent.approvalPolicy,
     modeChangePending: permissionProfileChangePending,
     permissionProfileChangePending,
     fullAccessTurns: session?.full_access_turns ?? null,
@@ -510,6 +531,7 @@ export function useAgentForHuman(
     setMode,
     setCollaborationMode,
     setPermissionProfile,
+    setExecutionProfile,
     setSessionMode,
     reconnect,
     reset,

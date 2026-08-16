@@ -85,6 +85,13 @@ Call and await `setPermissionProfile()`. The client sends an OIP `mode_change`
 and changes local authority only after the matching `mode_changed` response.
 Collaboration mode (`default` or `plan`) is a separate product preference.
 
+For product UI, use `executionProfile`, `availableExecutionProfiles`,
+`approvalPolicy`, and `setExecutionProfile()`. They expose the normalized
+`safe` / `default` / `full_access` vocabulary plus the exact authenticated
+Host mapping. A versioned 1.6.11 Host maps Default to Auto Approve; an old or
+unversioned persisted value named `default` restores conservatively as Safe.
+Browser storage and URL state are never used as permission authority.
+
 Codex and Claude Code child activity arrives as ordinary OIP
 `provider_invocation`, `tool_call`, and `tool_result` events. The package nests
 that activity under one provider card without requiring another transport.

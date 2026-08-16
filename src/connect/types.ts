@@ -201,6 +201,9 @@ export type PermissionProfile =
   | ':workspace'
   | ':danger-full-access';
 
+/** Product-facing execution profile, normalized from authenticated Host state. */
+export type ExecutionProfile = 'safe' | 'default' | 'full_access';
+
 /** Codex collaboration modes are independent of permission profiles. */
 export type CollaborationMode = 'default' | 'plan';
 
