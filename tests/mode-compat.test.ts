@@ -3,8 +3,72 @@ import {
   normalizeSessionState,
 } from '../src/connect/mode-compat';
 import { RemoteAgent } from '../src/connect/remote-agent';
+import { hostSessionModeState } from '../src/connect/wire-events';
 
 describe('previous permission vocabulary compatibility', () => {
+  test('accepts versioned Default only from authenticated Host capability state', () => {
+    expect(hostSessionModeState({
+      session_modes: {
+        schemaVersion: 1,
+        currentModeId: 'default',
+        policy: { id: 'connectonion.auto-approve', version: 1 },
+        availableModes: [
+          { id: 'safe', name: 'Safe' },
+          { id: 'default', name: 'Default', recommended: true },
+          {
+            id: 'full_access',
+            name: 'Full access',
+            dangerous: true,
+            bound: 'host-configured',
+          },
+        ],
+      },
+    })).toEqual({
+      schemaVersion: 1,
+      policy: { id: 'connectonion.auto-approve', version: 1 },
+      currentModeId: ':workspace',
+      currentProfileId: 'default',
+      availableModes: [
+        { id: ':read-only', wireId: 'safe', profile: 'safe', name: 'Safe' },
+        {
+          id: ':workspace',
+          wireId: 'default',
+          profile: 'default',
+          name: 'Default',
+          recommended: true,
+        },
+        {
+          id: ':danger-full-access',
+          wireId: 'full_access',
+          profile: 'full_access',
+          name: 'Full access',
+          dangerous: true,
+          bound: 'host-configured',
+        },
+      ],
+    });
+  });
+
+  test('keeps unversioned default conservative instead of inferring Auto Approve', () => {
+    expect(hostSessionModeState({
+      session_modes: {
+        currentModeId: 'default',
+        availableModes: [{ id: 'default', name: 'Default' }],
+      },
+    })).toEqual({
+      schemaVersion: null,
+      policy: null,
+      currentModeId: ':read-only',
+      currentProfileId: 'safe',
+      availableModes: [{
+        id: ':read-only',
+        wireId: 'default',
+        profile: 'safe',
+        name: 'Default',
+      }],
+    });
+  });
+
   test.each([
     ['safe', ':read-only'],
     ['default', ':read-only'],

@@ -40,7 +40,7 @@
  */
 import * as address from '../address';
 import {
-  AgentInfo, AgentStatus, ApprovalMode, ChatItem, ChatItemType, CollaborationMode, ConnectionState,
+  AgentInfo, AgentStatus, ApprovalMode, ChatItem, ChatItemType, CollaborationMode, ConnectionState, ExecutionProfile,
   ConnectOptions, PermissionProfile, PlanEntry, RemoteSessionStatus, ResolvedEndpoint, Response, SessionState, WebSocketCtor, WebSocketLike,
 } from './types';
 import {
@@ -75,6 +75,7 @@ interface PendingPermissionProfileChange {
   requestId: string;
   sessionId: string;
   profile: PermissionProfile;
+  wireId: string;
   resolve: () => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -201,6 +202,16 @@ export class RemoteAgent {
   get ui(): ChatItem[] { return this._chatItems; }
   get permissionProfile(): PermissionProfile {
     return this._currentSession?.mode || ':read-only';
+  }
+  get executionProfile(): ExecutionProfile {
+    return this._permissionProfileState?.currentProfileId
+      ?? (this.permissionProfile === ':read-only'
+        ? 'safe'
+        : this.permissionProfile === ':workspace' ? 'default' : 'full_access');
+  }
+  get approvalPolicy(): HostSessionModeState['policy'] {
+    const policy = this._permissionProfileState?.policy;
+    return policy ? { ...policy } : null;
   }
   get collaborationMode(): CollaborationMode {
     return this._currentSession?.collaboration_mode || 'default';
@@ -514,6 +525,25 @@ export class RemoteAgent {
 
   /** Change durable Host permissions only after one owned acknowledgement. */
   async setPermissionProfile(profile: PermissionProfile): Promise<void> {
+    const advertised = this._permissionProfileState?.availableModes.find(
+      (item) => item.id === profile,
+    );
+    await this._setPermissionProfile(profile, advertised?.wireId ?? profile);
+  }
+
+  /** Change the normalized product profile using the Host-advertised wire value. */
+  async setExecutionProfile(profile: ExecutionProfile): Promise<void> {
+    const advertised = this._permissionProfileState?.availableModes.find(
+      (item) => item.profile === profile,
+    );
+    if (!advertised) throw new Error(`Execution profile is not available: ${profile}`);
+    await this._setPermissionProfile(advertised.id, advertised.wireId);
+  }
+
+  private async _setPermissionProfile(
+    profile: PermissionProfile,
+    wireId: string,
+  ): Promise<void> {
     try {
       if (!isCanonicalPermissionProfile(profile)) {
         throw new Error(`Unsupported permission profile: ${String(profile)}`);
@@ -537,7 +567,7 @@ export class RemoteAgent {
       if (this._currentSession?.mode === profile) return;
 
       const requestId = generateUUID();
-      const request = { type: 'mode_change', mode: profile };
+      const request = { type: 'mode_change', mode: wireId };
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => {
           const pending = this._pendingPermissionProfileChange;
@@ -551,6 +581,7 @@ export class RemoteAgent {
           requestId,
           sessionId,
           profile,
+          wireId,
           resolve,
           reject,
           timer,
@@ -683,6 +714,16 @@ export class RemoteAgent {
     clearTimeout(pending.timer);
     this._pendingPermissionProfileChange = null;
     this._applyServerMode(pending.profile);
+    const advertised = this._permissionProfileState?.availableModes.find(
+      (item) => item.wireId === pending.wireId,
+    );
+    if (this._permissionProfileState && advertised) {
+      this._permissionProfileState = {
+        ...this._permissionProfileState,
+        currentModeId: advertised.id,
+        currentProfileId: advertised.profile,
+      };
+    }
     this._error = null;
     pending.resolve();
     this._onMessage?.();
@@ -1056,20 +1097,32 @@ export class RemoteAgent {
     }
 
     if (data?.type === 'mode_changed') {
-      const profile = parsePermissionProfile(data.mode);
+      const advertised = this._permissionProfileState?.availableModes.find(
+        (item) => item.wireId === data.mode,
+      );
+      const profile = advertised?.id ?? parsePermissionProfile(data.mode);
       const pending = this._pendingPermissionProfileChange;
       const responseSession = typeof data.session_id === 'string'
         ? data.session_id
         : this._currentSession?.session_id;
       if (
         pending
-        && profile === pending.profile
+        && data.mode === pending.wireId
         && responseSession === pending.sessionId
       ) {
         this._resolvePermissionProfileChange(pending);
         return;
       }
-      if (profile && this._applyServerMode(profile)) this._onMessage?.();
+      if (profile) {
+        if (this._permissionProfileState && advertised) {
+          this._permissionProfileState = {
+            ...this._permissionProfileState,
+            currentModeId: advertised.id,
+            currentProfileId: advertised.profile,
+          };
+        }
+        if (this._applyServerMode(profile)) this._onMessage?.();
+      }
       return;
     }
 

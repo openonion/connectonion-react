@@ -16,6 +16,7 @@ export type {
   SkillInfo,
   ApprovalMode,
   CollaborationMode,
+  ExecutionProfile,
   PermissionProfile,
   ServerApprovalMode,
   PlanEntry,
