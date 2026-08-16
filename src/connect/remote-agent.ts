@@ -41,7 +41,7 @@
 import * as address from '../address';
 import {
   AgentInfo, AgentStatus, ApprovalMode, ChatItem, ChatItemType, CollaborationMode, ConnectionState, ExecutionProfile,
-  ConnectOptions, PermissionProfile, PlanEntry, RemoteSessionStatus, ResolvedEndpoint, Response, SessionState, WebSocketCtor, WebSocketLike,
+  ConnectOptions, PermissionProfile, PlanEntry, ProviderApprovalPresentation, RemoteSessionStatus, ResolvedEndpoint, Response, SessionState, WebSocketCtor, WebSocketLike,
 } from './types';
 import {
   AgentInfoSource, getWebSocketCtor, generateUUID, normalizeRelayUrl, resolveEndpoint, toAgentInfo,
@@ -110,6 +110,82 @@ function providerApprovalContext(data: Record<string, unknown>) {
     providerInvocationId: invocationId,
     parentToolCallId,
     ...(typeof activityId === 'string' && activityId && { activityId }),
+  };
+}
+
+const PROVIDER_APPROVAL_ACTIONS = new Set([
+  'Run a workspace command',
+  'Compile the requested C11 program',
+  'Compile the requested C program',
+  'Compile and run the requested tests',
+  'Run the requested tests',
+  'Run the requested program',
+  'Inspect the workspace',
+  'Make workspace file changes',
+  'Expand provider permissions',
+  'Perform a provider action',
+]);
+const PROVIDER_APPROVAL_REASONS = new Set([
+  'Codex requested approval to continue',
+  'Claude Code requested approval to continue',
+  'Compile the requested workspace files before continuing',
+  'Verify the requested workspace changes before continuing',
+  'Verify the requested program before continuing',
+  'Check the requested workspace result before continuing',
+  'Apply the requested workspace file changes',
+  'Review the requested permission expansion',
+]);
+const PROVIDER_APPROVAL_SCOPES = {
+  workroom: 'This Work Room only',
+  elevated: 'Outside this Work Room',
+  unknown: 'Boundary could not be verified',
+} as const;
+
+function providerFileName(file: string): string {
+  let normalized = file.split('\\').join('/');
+  while (normalized.endsWith('/')) normalized = normalized.slice(0, -1);
+  const lastSeparator = normalized.lastIndexOf('/');
+  return normalized.slice(lastSeparator + 1, lastSeparator + 129);
+}
+
+function providerApprovalPresentation(
+  data: Record<string, unknown>,
+): ProviderApprovalPresentation | undefined {
+  const raw = data.providerApproval;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const value = raw as Record<string, unknown>;
+  const classification = value.scopeClassification;
+  const action = value.action;
+  const scope = value.scope;
+  const reason = value.reason;
+  if (
+    (classification !== 'workroom' && classification !== 'elevated' && classification !== 'unknown')
+    || typeof action !== 'string' || !PROVIDER_APPROVAL_ACTIONS.has(action)
+    || scope !== PROVIDER_APPROVAL_SCOPES[classification]
+    || typeof reason !== 'string' || !PROVIDER_APPROVAL_REASONS.has(reason)
+    || typeof value.allowOnce !== 'boolean'
+    || typeof value.allowSession !== 'boolean'
+  ) return undefined;
+  const files = Array.isArray(value.files)
+    ? [...new Set(value.files
+      .filter((file): file is string => typeof file === 'string')
+      .map(providerFileName)
+      .filter(Boolean)
+    )]
+      .slice(0, 8)
+    : undefined;
+  return {
+    action,
+    scope: scope as string,
+    reason,
+    scopeClassification: classification as ProviderApprovalPresentation['scopeClassification'],
+    // `unknown` is not a narrower Work Room. Rendering an allow control for
+    // an incomplete or legacy envelope would turn a malformed scope into a
+    // fail-open approval path, so only Core's explicit workroom boundary can
+    // preserve an allow flag.
+    allowOnce: classification === 'workroom' ? value.allowOnce : false,
+    allowSession: classification === 'workroom' ? value.allowSession : false,
+    ...(files?.length && { files }),
   };
 }
 
@@ -443,6 +519,10 @@ export class RemoteAgent {
       );
       return;
     }
+    if (message.type === 'PROVIDER_INTERRUPT') {
+      this.interruptProvider(typeof message.invocationId === 'string' ? message.invocationId : '');
+      return;
+    }
     if (message.type === 'ONBOARD_SUBMIT') {
       this._sendOpen(message);
     } else {
@@ -506,6 +586,12 @@ export class RemoteAgent {
 
     this._sendAuthenticated({ type: 'INTERRUPT' });
     this._interruptSent = true;
+  }
+
+  /** Stop one native provider run without cancelling the enclosing OIP turn. */
+  interruptProvider(invocationId: string): void {
+    if (!invocationId || invocationId.length > 512) return;
+    this._sendAuthenticated({ type: 'PROVIDER_INTERRUPT', invocationId });
   }
 
   private _sendPendingApproval(
@@ -1143,6 +1229,7 @@ export class RemoteAgent {
     if (data?.type === 'llm_call' || data?.type === 'llm_result' ||
         data?.type === 'tool_call' || data?.type === 'tool_result' ||
         data?.type === 'tool_call_update' || data?.type === 'provider_invocation' ||
+        data?.type === 'provider_activity' ||
         data?.type === 'thinking' || data?.type === 'assistant' ||
         data?.type === 'agent_image' ||
         data?.type === 'intent' || data?.type === 'eval' || data?.type === 'compact' ||
@@ -1176,6 +1263,10 @@ export class RemoteAgent {
     if (data?.type === 'approval_needed') {
       const requestId = typeof data.id === 'string' ? data.id : undefined;
       const chatItemId = requestId || generateUUID();
+      const providerContext = providerApprovalContext(data);
+      const providerApproval = Object.keys(providerContext).length
+        ? providerApprovalPresentation(data)
+        : undefined;
       this._pendingApproval = {
         chatItemId,
         answered: false,
@@ -1188,7 +1279,8 @@ export class RemoteAgent {
         arguments: data.arguments as Record<string, unknown>,
         ...(data.description && { description: data.description as string }),
         ...(data.batch_remaining && { batch_remaining: data.batch_remaining as Array<{ tool: string; arguments: string }> }),
-        ...providerApprovalContext(data),
+        ...providerContext,
+        ...(providerApproval && { providerApproval }),
       });
     }
 

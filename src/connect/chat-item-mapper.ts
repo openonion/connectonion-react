@@ -13,6 +13,61 @@ const RUNNING_TOOL_STATUSES = new Set(['pending', 'running', 'in_progress']);
 const PROVIDER_STATUSES = new Set([
   'starting', 'running', 'awaiting_approval', 'completed', 'failed', 'cancelled',
 ]);
+const TERMINAL_PROVIDER_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const PROVIDER_ACTIVITY_KINDS = new Set([
+  'command', 'file_change', 'inspect', 'search', 'tool',
+]);
+const PROVIDER_ACTIVITY_STATUSES = new Set(['running', 'completed', 'failed']);
+const SAFE_PROVIDER_TASK_TITLES = new Set([
+  'Complete the requested task',
+  'Build and verify the requested C program',
+  'Implement and verify the requested change',
+  'Review and test the requested change',
+  'Inspect the requested workspace',
+]);
+const SAFE_PROVIDER_INVOCATION_SUMMARIES = new Set([
+  'Working in the selected workspace',
+  'Waiting for your decision',
+  'The provider completed its run',
+  'The provider reported an error',
+  'The provider stopped',
+  'Completed the provider run after the recorded compilation and test checks',
+  'Completed the provider run after the recorded test checks',
+  'Completed the provider run after the recorded compilation check',
+  'Completed the provider run after the recorded program check',
+]);
+const SAFE_PROVIDER_ACTIVITY_COPY = new Set([
+  'Update workspace files\u0000Preparing workspace file changes',
+  'Update workspace files\u0000Workspace files updated',
+  'Update workspace files\u0000Workspace file change failed',
+  'Inspect the workspace\u0000Inspecting workspace context',
+  'Inspect the workspace\u0000Workspace inspection completed',
+  'Inspect the workspace\u0000Workspace inspection failed',
+  'Search for context\u0000Searching for relevant context',
+  'Search for context\u0000Context search completed',
+  'Search for context\u0000Context search failed',
+  'Use a provider tool\u0000Using a provider tool',
+  'Use a provider tool\u0000Provider tool completed',
+  'Use a provider tool\u0000Provider tool failed',
+  'Compile the requested C11 program\u0000Compiling the requested C11 program',
+  'Compile the requested C11 program\u0000Compiled the requested C11 program',
+  'Compile the requested C11 program\u0000Could not compile the requested C11 program',
+  'Compile the requested C program\u0000Compiling the requested C program',
+  'Compile the requested C program\u0000Compiled the requested C program',
+  'Compile the requested C program\u0000Could not compile the requested C program',
+  'Compile and run the requested tests\u0000Compiling and running the requested tests',
+  'Compile and run the requested tests\u0000Completed the requested compilation and tests',
+  'Compile and run the requested tests\u0000The requested compilation or tests failed',
+  'Run the requested tests\u0000Running the requested tests',
+  'Run the requested tests\u0000Completed the requested tests',
+  'Run the requested tests\u0000The requested tests failed',
+  'Run the requested program\u0000Running the requested program',
+  'Run the requested program\u0000Completed the requested program run',
+  'Run the requested program\u0000The requested program run failed',
+  'Run a workspace command\u0000Running a workspace command',
+  'Run a workspace command\u0000Completed a workspace command',
+  'Run a workspace command\u0000A workspace command failed',
+]);
 
 function toolResultStatus(status: unknown): 'done' | 'error' {
   return typeof status === 'string' && SUCCESSFUL_TOOL_RESULTS.has(status)
@@ -27,11 +82,65 @@ function toolStartStatus(status: unknown): 'running' | 'error' {
   return 'error';
 }
 
-function providerInvocation(chatItems: ChatItem[], parentId: unknown) {
+function providerInvocation(
+  chatItems: ChatItem[],
+  parentId: unknown,
+  invocationId?: unknown,
+) {
   if (typeof parentId !== 'string') return undefined;
   return chatItems.find(
     (item): item is Extract<ChatItem, { type: 'provider_invocation' }> =>
-      item.type === 'provider_invocation' && item.parentToolCallId === parentId
+      item.type === 'provider_invocation'
+      && item.parentToolCallId === parentId
+      && (typeof invocationId !== 'string' || item.id === invocationId)
+  );
+}
+
+function providerActivityStatus(status: unknown): 'running' | 'done' | 'error' {
+  if (status === 'running') return 'running';
+  return status === 'completed' ? 'done' : 'error';
+}
+
+function providerText(
+  value: unknown,
+  allowed: ReadonlySet<string>,
+): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  return allowed.has(text) ? text : undefined;
+}
+
+function providerPermissionMode(value: unknown) {
+  return value === 'manual' || value === 'auto_approve' || value === 'full_access'
+    ? value
+    : undefined;
+}
+
+function safeProviderDisplayName(provider: 'codex' | 'claude_code') {
+  return provider === 'codex' ? 'Codex' : 'Claude Code';
+}
+
+function providerFileName(file: string): string {
+  let normalized = file.split('\\').join('/');
+  while (normalized.endsWith('/')) normalized = normalized.slice(0, -1);
+  const lastSeparator = normalized.lastIndexOf('/');
+  return normalized.slice(lastSeparator + 1, lastSeparator + 129);
+}
+
+function providerFiles(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const files = [...new Set(value
+    .filter((file): file is string => typeof file === 'string')
+    .map(providerFileName)
+    .filter(Boolean)
+  )]
+    .slice(0, 8);
+  return files.length ? files : undefined;
+}
+
+function sortProviderActivities(invocation: Extract<ChatItem, { type: 'provider_invocation' }>) {
+  invocation.activities.sort((left, right) =>
+    (left.sequence ?? Number.MAX_SAFE_INTEGER) - (right.sequence ?? Number.MAX_SAFE_INTEGER)
   );
 }
 
@@ -55,28 +164,49 @@ export function mapEventToChatItem(
         (item): item is Extract<ChatItem, { type: 'provider_invocation' }> =>
           item.type === 'provider_invocation' && item.id === id
       );
+      const provider = decoded.provider as 'codex' | 'claude_code';
+      const taskTitle = providerText(decoded.taskTitle, SAFE_PROVIDER_TASK_TITLES);
+      const currentSummary = providerText(
+        decoded.currentSummary,
+        SAFE_PROVIDER_INVOCATION_SUMMARIES,
+      );
+      const resultSummary = providerText(
+        decoded.resultSummary,
+        SAFE_PROVIDER_INVOCATION_SUMMARIES,
+      );
+      const errorSummary = providerText(
+        decoded.errorSummary,
+        SAFE_PROVIDER_INVOCATION_SUMMARIES,
+      );
       const update = {
-        ...(typeof decoded.taskSummary === 'string' && { taskSummary: decoded.taskSummary }),
+        ...(taskTitle && { taskTitle }),
+        ...(currentSummary && { currentSummary }),
         ...(typeof decoded.status === 'string' && PROVIDER_STATUSES.has(decoded.status) && {
           status: decoded.status as Extract<ChatItem, { type: 'provider_invocation' }>['status'],
         }),
         ...(typeof decoded.sessionId === 'string' && { sessionId: decoded.sessionId }),
-        ...(typeof decoded.elapsedMs === 'number' && { elapsedMs: decoded.elapsedMs }),
-        ...(typeof decoded.result === 'string' && { result: decoded.result }),
-        ...(typeof decoded.error === 'string' && { error: decoded.error }),
+        ...(typeof decoded.elapsedMs === 'number' && Number.isFinite(decoded.elapsedMs)
+          && decoded.elapsedMs >= 0 && { elapsedMs: decoded.elapsedMs }),
+        ...(resultSummary && { resultSummary }),
+        ...(errorSummary && { errorSummary }),
       };
       if (existing) {
         Object.assign(existing, update);
+        // A later terminal event is authoritative over a streamed progress
+        // summary. Keeping the old `currentSummary` makes a completed or failed
+        // Work Room look as if it were still on its last live step.
+        if (update.status && TERMINAL_PROVIDER_STATUSES.has(update.status)) {
+          delete existing.currentSummary;
+        }
         break;
       }
       const item = {
         id,
         type: 'provider_invocation' as const,
         parentToolCallId: decoded.parentToolCallId,
-        provider: decoded.provider,
-        providerDisplayName: typeof decoded.providerDisplayName === 'string'
-          ? decoded.providerDisplayName : decoded.provider,
-        permissionMode: decoded.permissionMode,
+        provider,
+        providerDisplayName: safeProviderDisplayName(provider),
+        permissionMode: providerPermissionMode(decoded.permissionMode),
         status: (
           typeof decoded.status === 'string' && PROVIDER_STATUSES.has(decoded.status)
             ? decoded.status : 'running'
@@ -91,16 +221,66 @@ export function mapEventToChatItem(
       else addItem(item);
       break;
     }
+    case 'provider_activity': {
+      if (
+        typeof decoded.invocationId !== 'string'
+        || typeof decoded.parentToolCallId !== 'string'
+        || (decoded.provider !== 'codex' && decoded.provider !== 'claude_code')
+        || typeof decoded.activityId !== 'string'
+        || !Number.isInteger(decoded.sequence)
+        || (decoded.sequence as number) < 1
+        || typeof decoded.kind !== 'string'
+        || !PROVIDER_ACTIVITY_KINDS.has(decoded.kind)
+        || typeof decoded.status !== 'string'
+        || !PROVIDER_ACTIVITY_STATUSES.has(decoded.status)
+      ) break;
+      const invocation = providerInvocation(
+        chatItems,
+        decoded.parentToolCallId,
+        decoded.invocationId,
+      );
+      const title = typeof decoded.title === 'string' ? decoded.title.trim() : undefined;
+      const summary = typeof decoded.summary === 'string' ? decoded.summary.trim() : undefined;
+      if (!invocation || !title || !summary
+        || !SAFE_PROVIDER_ACTIVITY_COPY.has(`${title}\u0000${summary}`)) break;
+      const activity = {
+        id: decoded.activityId,
+        sequence: decoded.sequence as number,
+        kind: decoded.kind as Extract<ChatItem, { type: 'provider_invocation' }>['activities'][number]['kind'],
+        status: providerActivityStatus(decoded.status),
+        title,
+        summary,
+        legacy: false,
+        ...(providerFiles(decoded.files) && { files: providerFiles(decoded.files) }),
+      };
+      const existing = invocation.activities.find(item => item.id === activity.id);
+      if (existing) {
+        delete existing.name;
+        delete existing.args;
+        delete existing.result;
+        Object.assign(existing, activity);
+      } else {
+        invocation.activities.push(activity);
+      }
+      sortProviderActivities(invocation);
+      break;
+    }
     case 'tool_call': {
       const toolId = (decoded.tool_id || decoded.id) as string;
-      const invocation = providerInvocation(chatItems, decoded.parentToolCallId);
+      const invocation = providerInvocation(
+        chatItems,
+        decoded.parentToolCallId,
+        decoded.invocationId,
+      );
       if (invocation) {
         const existingActivity = invocation.activities.find(item => item.id === toolId);
+        if (existingActivity && existingActivity.legacy === false) break;
         const activity = {
           id: toolId,
           name: decoded.name as string,
           args: decoded.args as Record<string, unknown>,
           status: toolStartStatus(decoded.status),
+          legacy: true,
         };
         if (existingActivity) Object.assign(existingActivity, activity);
         else invocation.activities.push(activity);
@@ -128,10 +308,15 @@ export function mapEventToChatItem(
 
     case 'tool_call_update': {
       const toolId = (decoded.tool_id || decoded.id) as string;
-      const invocation = providerInvocation(chatItems, decoded.parentToolCallId);
+      const invocation = providerInvocation(
+        chatItems,
+        decoded.parentToolCallId,
+        decoded.invocationId,
+      );
       if (invocation) {
         const activity = invocation.activities.find(item => item.id === toolId);
         if (activity) {
+          if (activity.legacy === false) break;
           activity.status = RUNNING_TOOL_STATUSES.has(String(decoded.status))
             ? 'running' : toolResultStatus(decoded.status);
           if (typeof decoded.result === 'string') activity.result = decoded.result;

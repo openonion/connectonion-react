@@ -11,7 +11,8 @@ test('replaces the parent tool with one provider card and nests child activity',
   }];
   apply(items, {
     type: 'provider_invocation', invocationId: 'codex:call-7', parentToolCallId: 'call-7',
-    provider: 'codex', providerDisplayName: 'Codex', taskSummary: 'fix it', status: 'running',
+    provider: 'codex', providerDisplayName: 'Codex', taskSummary: 'fix it',
+    currentSummary: 'Working in the selected workspace', status: 'running',
   });
   apply(items, {
     type: 'tool_call', tool_id: 'child-1', name: 'Bash', args: { command: 'pytest' },
@@ -24,13 +25,16 @@ test('replaces the parent tool with one provider card and nests child activity',
   apply(items, {
     type: 'provider_invocation', invocationId: 'codex:call-7', parentToolCallId: 'call-7',
     provider: 'codex', providerDisplayName: 'Codex', status: 'completed', elapsedMs: 38,
+    resultSummary: 'The provider completed its run',
   });
 
   expect(items).toHaveLength(1);
   expect(items[0]).toMatchObject({
     type: 'provider_invocation', id: 'codex:call-7', status: 'completed', elapsedMs: 38,
+    resultSummary: 'The provider completed its run',
     activities: [{ id: 'child-1', name: 'Bash', status: 'done', result: 'ok' }],
   });
+  expect((items[0] as Extract<ChatItem, { type: 'provider_invocation' }>).currentSummary).toBeUndefined();
 });
 
 test('unknown providers keep the generic tool fallback', () => {
@@ -55,4 +59,138 @@ test('replayed duplicate child events update instead of duplicating', () => {
   apply(items, child);
   expect(items).toHaveLength(1);
   expect(items[0].type === 'provider_invocation' && items[0].activities).toHaveLength(1);
+});
+
+test('an approval update replaces a stale live summary with the explicit waiting state', () => {
+  const items: ChatItem[] = [{
+    id: 'call-7', type: 'tool_call', name: 'codex', status: 'running', args: {},
+  }];
+  apply(items, {
+    type: 'provider_invocation', invocationId: 'codex:call-7', parentToolCallId: 'call-7',
+    provider: 'codex', providerDisplayName: 'Codex',
+    currentSummary: 'Working in the selected workspace', status: 'running',
+  });
+  apply(items, {
+    type: 'provider_invocation', invocationId: 'codex:call-7', parentToolCallId: 'call-7',
+    provider: 'codex', providerDisplayName: 'Codex',
+    currentSummary: 'Waiting for your decision', status: 'awaiting_approval',
+  });
+
+  expect(items[0]).toMatchObject({
+    type: 'provider_invocation',
+    status: 'awaiting_approval',
+    currentSummary: 'Waiting for your decision',
+  });
+});
+
+test('safe typed activity replaces legacy raw data and keeps native sequence order', () => {
+  const items: ChatItem[] = [{
+    id: 'parent', type: 'tool_call', name: 'codex', status: 'running', args: {},
+  }];
+  apply(items, {
+    type: 'provider_invocation', invocationId: 'codex:parent', parentToolCallId: 'parent',
+    provider: 'codex', providerDisplayName: 'Codex',
+    taskTitle: 'Implement and verify the requested change',
+    taskSummary: 'Implement and verify the requested change',
+    currentSummary: 'Working in the selected workspace', status: 'running',
+  });
+  apply(items, {
+    type: 'tool_call', tool_id: 'compile', name: 'cc --token private-value',
+    args: { cwd: '/private/tmp/private-workroom' }, status: 'in_progress',
+    parentToolCallId: 'parent', invocationId: 'codex:parent',
+  });
+  apply(items, {
+    type: 'provider_activity', provider: 'codex', activityId: 'compile', sequence: 2,
+    kind: 'command', status: 'running', title: 'Run a workspace command',
+    summary: 'Running a workspace command', parentToolCallId: 'parent', invocationId: 'codex:parent',
+  });
+  apply(items, {
+    type: 'provider_activity', provider: 'codex', activityId: 'inspect', sequence: 1,
+    kind: 'inspect', status: 'completed', title: 'Inspect the workspace',
+    summary: 'Workspace inspection completed', parentToolCallId: 'parent', invocationId: 'codex:parent',
+  });
+  apply(items, {
+    type: 'tool_result', tool_id: 'compile', status: 'completed', result: 'private output',
+    parentToolCallId: 'parent', invocationId: 'codex:parent',
+  });
+  apply(items, {
+    type: 'provider_activity', provider: 'codex', activityId: 'compile', sequence: 2,
+    kind: 'command', status: 'completed', title: 'Run a workspace command',
+    summary: 'Completed a workspace command', parentToolCallId: 'parent', invocationId: 'codex:parent',
+  });
+
+  const invocation = items[0] as Extract<ChatItem, { type: 'provider_invocation' }>;
+  expect(invocation.taskTitle).toBe('Implement and verify the requested change');
+  expect(invocation.currentSummary).toBe('Working in the selected workspace');
+  expect(invocation.activities).toEqual([
+    {
+      id: 'inspect', sequence: 1, kind: 'inspect', status: 'done', legacy: false,
+      title: 'Inspect the workspace', summary: 'Workspace inspection completed',
+    },
+    {
+      id: 'compile', sequence: 2, kind: 'command', status: 'done', legacy: false,
+      title: 'Run a workspace command', summary: 'Completed a workspace command',
+    },
+  ]);
+  expect(JSON.stringify(invocation.activities)).not.toContain('private');
+});
+
+test('drops raw provider text instead of treating the transport as a presentation authority', () => {
+  const items: ChatItem[] = [{
+    id: 'parent', type: 'tool_call', name: 'codex', status: 'running', args: {},
+  }];
+  apply(items, {
+    type: 'provider_invocation', invocationId: 'codex:parent', parentToolCallId: 'parent',
+    provider: 'codex', providerDisplayName: 'untrusted provider label',
+    taskTitle: 'Run curl https://example.invalid/?token=private',
+    taskSummary: 'private prompt',
+    currentSummary: 'private native output',
+    status: 'running',
+  });
+  apply(items, {
+    type: 'provider_activity', provider: 'codex', activityId: 'raw', sequence: 1,
+    kind: 'command', status: 'completed', title: 'curl https://example.invalid',
+    summary: 'private native output', parentToolCallId: 'parent', invocationId: 'codex:parent',
+  });
+
+  const invocation = items[0] as Extract<ChatItem, { type: 'provider_invocation' }>;
+  expect(invocation.providerDisplayName).toBe('Codex');
+  expect(invocation.taskTitle).toBeUndefined();
+  expect(invocation.taskSummary).toBeUndefined();
+  expect(invocation.currentSummary).toBeUndefined();
+  expect(invocation.activities).toEqual([]);
+  expect(JSON.stringify(invocation)).not.toContain('private');
+});
+
+test('typed activity with mismatched invocation correlation is ignored', () => {
+  const items: ChatItem[] = [];
+  apply(items, {
+    type: 'provider_invocation', invocationId: 'codex:one', parentToolCallId: 'one',
+    provider: 'codex', providerDisplayName: 'Codex', status: 'running',
+  });
+  apply(items, {
+    type: 'provider_activity', provider: 'codex', activityId: 'wrong-parent', sequence: 1,
+    kind: 'command', status: 'running', title: 'Run a workspace command',
+    summary: 'Running a workspace command', parentToolCallId: 'other', invocationId: 'codex:one',
+  });
+
+  const invocation = items[0] as Extract<ChatItem, { type: 'provider_invocation' }>;
+  expect(invocation.activities).toEqual([]);
+});
+
+test('keeps only bounded basenames from safe provider activity file evidence', () => {
+  const items: ChatItem[] = [];
+  apply(items, {
+    type: 'provider_invocation', invocationId: 'codex:files', parentToolCallId: 'files',
+    provider: 'codex', providerDisplayName: 'Codex', status: 'running',
+  });
+  apply(items, {
+    type: 'provider_activity', provider: 'codex', activityId: 'files', sequence: 1,
+    kind: 'file_change', status: 'completed', title: 'Update workspace files',
+    summary: 'Workspace files updated', parentToolCallId: 'files', invocationId: 'codex:files',
+    files: ['C:\\\\private\\\\sort.c', '/tmp/workroom/result.txt/', '///'],
+  });
+
+  const invocation = items[0] as Extract<ChatItem, { type: 'provider_invocation' }>;
+  expect(invocation.activities[0].files).toEqual(['sort.c', 'result.txt']);
 });

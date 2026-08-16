@@ -166,6 +166,9 @@ export interface UseAgentForHumanReturn {
   /** Stop the current OIP turn. */
   interrupt: () => void;
 
+  /** Stop one exact native Codex/Claude provider invocation. */
+  interruptProvider: (invocationId: string) => void;
+
   /** Sign an onboard payload asynchronously. Pass the resolved result to sendMessage(). */
   signOnboard: (options: { inviteCode?: string; payment?: number }) => Promise<OutgoingMessage>;
 
@@ -463,6 +466,7 @@ export function useAgentForHuman(
   ) => agent.respondToApproval(approved, scope, mode, feedback);
 
   const interrupt = () => agent.interrupt();
+  const interruptProvider = (invocationId: string) => agent.interruptProvider(invocationId);
 
   const setMode = (newMode: ApprovalMode, options?: { turns?: number }) => {
     const isCollaborationMode = newMode === 'default' || newMode === 'plan';
@@ -527,6 +531,7 @@ export function useAgentForHuman(
     sendMessage,
     respondToApproval,
     interrupt,
+    interruptProvider,
     signOnboard: (options: { inviteCode?: string; payment?: number }) => agent.signOnboard(options),
     setMode,
     setCollaborationMode,
