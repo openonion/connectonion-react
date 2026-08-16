@@ -165,6 +165,7 @@ export async function resolveEndpoint(
   // null so RemoteAgent falls back to the relay /ws/input path. Swallowing
   // here is the contract, not hiding a bug.
   const agentInfo = await fetch(`${httpsRelay}/api/agents/${agentAddress}`, {
+    cache: 'no-store',
     signal: AbortSignal.timeout(timeoutMs),
   })
     .then(r => r.ok ? r.json() as Promise<{ endpoints?: string[] }> : null)
@@ -179,7 +180,10 @@ export async function resolveEndpoint(
     // Probe — many advertised endpoints (localhost, docker IPs, NAT-bound
     // public IPs) will fail from the caller's network. A single failure
     // must not abort the loop.
-    const info = await fetch(`${httpUrl}/info`, { signal: AbortSignal.timeout(timeoutMs) })
+    const info = await fetch(`${httpUrl}/info`, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(timeoutMs),
+    })
       .then(r => r.ok ? r.json() as Promise<{ address?: string }> : null)
       .catch(() => null);
 
@@ -218,6 +222,7 @@ export async function fetchAgentInfo(
 
   // Outer lookup — fetch failures surface as "offline" rather than crashing.
   const relayData = await fetch(`${httpsRelay}/api/agents/${agentAddress}`, {
+    cache: 'no-store',
     signal: AbortSignal.timeout(5000),
   })
     .then(r => r.ok ? r.json() as Promise<{
@@ -245,7 +250,10 @@ export async function fetchAgentInfo(
 
   for (const httpUrl of httpEndpoints) {
     // Probe each endpoint; unreachable ones yield null and we move on.
-    const info = await fetch(`${httpUrl}/info`, { signal: AbortSignal.timeout(3000) })
+    const info = await fetch(`${httpUrl}/info`, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(3000),
+    })
       .then(r => r.ok ? r.json() as Promise<AgentInfoSource> : null)
       .catch(() => null);
 

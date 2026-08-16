@@ -18,7 +18,7 @@
  * Three guaranteed failures, two console errors, one port scan of the reader's
  * own machine, and the relay fallback delayed behind all of it.
  */
-import { resolveEndpoint } from '../src/connect/endpoint';
+import { fetchAgentInfo, resolveEndpoint } from '../src/connect/endpoint';
 
 const ADDR = '0x' + 'b'.repeat(64);
 
@@ -92,6 +92,35 @@ describe('an https page', () => {
 
     expect(await resolveEndpoint(ADDR, 'wss://oo.openonion.ai')).toBeNull();
     expect(probed).toEqual([]);
+  });
+
+  test('all Relay discovery and direct info requests bypass stale browser caches', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    setPageProtocol('https:');
+    globalThis.fetch = jest.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, init });
+      if (url.includes('/api/agents/')) {
+        return {
+          ok: true,
+          json: async () => ({
+            endpoints: ['https://agent.example.com'],
+            relay: 'wss://oo.openonion.ai',
+          }),
+        } as unknown as Response;
+      }
+      return {
+        ok: true,
+        json: async () => ({ address: ADDR, name: 'Fresh agent' }),
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    await resolveEndpoint(ADDR, 'wss://oo.openonion.ai');
+    await fetchAgentInfo(ADDR, 'wss://oo.openonion.ai');
+
+    expect(calls).toHaveLength(4);
+    expect(calls.map(call => call.init?.cache)).toEqual([
+      'no-store', 'no-store', 'no-store', 'no-store',
+    ]);
   });
 });
 
