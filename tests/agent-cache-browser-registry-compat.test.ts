@@ -5,11 +5,11 @@
 export {};
 
 const ADDR = '0x' + 'a'.repeat(64);
-const REGISTRY_KEY = Symbol.for('@connectonion/react.live-agent-registry.v1');
+const REGISTRY_KEY = '__connectonionReactLiveAgentRegistryV2__';
 
 test('does not overwrite an incompatible browser registry', () => {
-  const incompatible = { version: 2, liveAgents: new Map() };
-  Object.defineProperty(globalThis, REGISTRY_KEY, {
+  const incompatible = { version: 99, liveAgents: new Map() };
+  Object.defineProperty(window, REGISTRY_KEY, {
     value: incompatible,
     enumerable: false,
     configurable: false,
@@ -29,7 +29,7 @@ test('does not overwrite an incompatible browser registry', () => {
   expect(landingRoute.acquireAgent(ADDR, 'safe-fallback')).not.toBe(
     sessionRoute.acquireAgent(ADDR, 'safe-fallback'),
   );
-  expect(Object.getOwnPropertyDescriptor(globalThis, REGISTRY_KEY)?.value).toBe(incompatible);
+  expect(Object.getOwnPropertyDescriptor(window, REGISTRY_KEY)?.value).toBe(incompatible);
   landingRoute._clearAgentCache();
   sessionRoute._clearAgentCache();
 });

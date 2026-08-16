@@ -8,7 +8,7 @@
 export {};
 
 const ADDR = '0x' + 'a'.repeat(64);
-const REGISTRY_KEY = Symbol.for('@connectonion/react.live-agent-registry.v1');
+const REGISTRY_KEY = '__connectonionReactLiveAgentRegistryV2__';
 type CacheModule = typeof import('../src/agent-cache');
 
 function isolatedCacheModule(): CacheModule {
@@ -27,7 +27,7 @@ test('shares an agent across isolated module instances in one browser realm', ()
   const sessionAgent = sessionRoute.acquireAgent(ADDR, 'shared-session');
 
   expect(sessionAgent).toBe(landingAgent);
-  expect(Object.getOwnPropertyDescriptor(globalThis, REGISTRY_KEY)).toMatchObject({
+  expect(Object.getOwnPropertyDescriptor(window, REGISTRY_KEY)).toMatchObject({
     enumerable: false,
     configurable: false,
     writable: false,

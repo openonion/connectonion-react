@@ -16,24 +16,36 @@
 import { connect } from './connect';
 
 type Agent = ReturnType<typeof connect>;
+type LiveAgentMap = Pick<
+  Map<string, Agent>,
+  'size' | 'get' | 'set' | 'delete' | 'keys' | 'values' | 'clear'
+>;
 
 interface AgentRegistry {
-  version: 1;
-  liveAgents: Map<string, Agent>;
+  version: 2;
+  liveAgents: LiveAgentMap;
 }
 
 // How many background connections stay live. A handful of open panels never hits this;
 // it only bounds a runaway (visiting dozens of sessions) so connections don't leak.
 export const MAX_LIVE_AGENTS = 6;
 
-const REGISTRY_VERSION = 1;
-const REGISTRY_KEY = Symbol.for('@connectonion/react.live-agent-registry.v1');
+const REGISTRY_VERSION = 2;
+const REGISTRY_KEY = '__connectonionReactLiveAgentRegistryV2__';
 const moduleLiveAgents = new Map<string, Agent>();
 
 function isAgentRegistry(value: unknown): value is AgentRegistry {
   if (typeof value !== 'object' || value === null) return false;
   const candidate = value as Partial<AgentRegistry>;
-  return candidate.version === REGISTRY_VERSION && candidate.liveAgents instanceof Map;
+  const agents = candidate.liveAgents as Partial<LiveAgentMap> | undefined;
+  return candidate.version === REGISTRY_VERSION
+    && typeof agents?.get === 'function'
+    && typeof agents.set === 'function'
+    && typeof agents.delete === 'function'
+    && typeof agents.keys === 'function'
+    && typeof agents.values === 'function'
+    && typeof agents.clear === 'function'
+    && typeof agents.size === 'number';
 }
 
 /**
@@ -41,10 +53,15 @@ function isAgentRegistry(value: unknown): value is AgentRegistry {
  * evaluate this module once per Turbopack route; a realm-owned registry lets those
  * copies reuse the same session lease. Server renders remain request/module local.
  */
-function getLiveAgents(): Map<string, Agent> {
-  if (typeof window === 'undefined' || globalThis !== window) return moduleLiveAgents;
+function getLiveAgents(): LiveAgentMap {
+  if (typeof window === 'undefined') return moduleLiveAgents;
 
-  const realm = globalThis as unknown as Record<PropertyKey, unknown>;
+  // Use the page Window explicitly. In a bundled browser app `globalThis` can be
+  // wrapped by a module runtime, while every route chunk still shares `window`.
+  // Version 1 also rejected a perfectly usable Map created by another realm
+  // because `instanceof Map` is realm-bound; the v2 key leaves that poisoned,
+  // non-configurable registry behind and validates the Map contract instead.
+  const realm = window as unknown as Record<string, unknown>;
   const existing = Object.getOwnPropertyDescriptor(realm, REGISTRY_KEY);
   if (existing) {
     return isAgentRegistry(existing.value) ? existing.value.liveAgents : moduleLiveAgents;
