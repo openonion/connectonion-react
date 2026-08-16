@@ -33,6 +33,7 @@ test('keeps native provider approval correlation without putting it in visible a
       scopeClassification: 'workroom',
       allowOnce: true,
       allowSession: false,
+      files: ['C:\\\\private\\\\sort.c', '/tmp/workroom/result.txt/', '///'],
     },
   }) });
 
@@ -52,6 +53,7 @@ test('keeps native provider approval correlation without putting it in visible a
       scopeClassification: 'workroom',
       allowOnce: true,
       allowSession: false,
+      files: ['sort.c', 'result.txt'],
     },
   }));
 });

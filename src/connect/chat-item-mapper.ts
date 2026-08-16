@@ -120,16 +120,20 @@ function safeProviderDisplayName(provider: 'codex' | 'claude_code') {
   return provider === 'codex' ? 'Codex' : 'Claude Code';
 }
 
+function providerFileName(file: string): string {
+  let normalized = file.split('\\').join('/');
+  while (normalized.endsWith('/')) normalized = normalized.slice(0, -1);
+  const lastSeparator = normalized.lastIndexOf('/');
+  return normalized.slice(lastSeparator + 1, lastSeparator + 129);
+}
+
 function providerFiles(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const files = [...new Set(value
     .filter((file): file is string => typeof file === 'string')
-    .map(file => {
-      const parts = file.replace(/\\/g, '/').replace(/\/+$/, '').split('/');
-      return parts[parts.length - 1] || '';
-    })
+    .map(providerFileName)
     .filter(Boolean)
-    .map(file => file.slice(0, 128)))]
+  )]
     .slice(0, 8);
   return files.length ? files : undefined;
 }

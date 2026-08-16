@@ -177,3 +177,20 @@ test('typed activity with mismatched invocation correlation is ignored', () => {
   const invocation = items[0] as Extract<ChatItem, { type: 'provider_invocation' }>;
   expect(invocation.activities).toEqual([]);
 });
+
+test('keeps only bounded basenames from safe provider activity file evidence', () => {
+  const items: ChatItem[] = [];
+  apply(items, {
+    type: 'provider_invocation', invocationId: 'codex:files', parentToolCallId: 'files',
+    provider: 'codex', providerDisplayName: 'Codex', status: 'running',
+  });
+  apply(items, {
+    type: 'provider_activity', provider: 'codex', activityId: 'files', sequence: 1,
+    kind: 'file_change', status: 'completed', title: 'Update workspace files',
+    summary: 'Workspace files updated', parentToolCallId: 'files', invocationId: 'codex:files',
+    files: ['C:\\\\private\\\\sort.c', '/tmp/workroom/result.txt/', '///'],
+  });
+
+  const invocation = items[0] as Extract<ChatItem, { type: 'provider_invocation' }>;
+  expect(invocation.activities[0].files).toEqual(['sort.c', 'result.txt']);
+});

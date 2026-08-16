@@ -141,6 +141,13 @@ const PROVIDER_APPROVAL_SCOPES = {
   unknown: 'Boundary could not be verified',
 } as const;
 
+function providerFileName(file: string): string {
+  let normalized = file.split('\\').join('/');
+  while (normalized.endsWith('/')) normalized = normalized.slice(0, -1);
+  const lastSeparator = normalized.lastIndexOf('/');
+  return normalized.slice(lastSeparator + 1, lastSeparator + 129);
+}
+
 function providerApprovalPresentation(
   data: Record<string, unknown>,
 ): ProviderApprovalPresentation | undefined {
@@ -162,9 +169,9 @@ function providerApprovalPresentation(
   const files = Array.isArray(value.files)
     ? [...new Set(value.files
       .filter((file): file is string => typeof file === 'string')
-      .map(file => file.replace(/\\/g, '/').replace(/\/+$/, '').split('/').pop() || '')
+      .map(providerFileName)
       .filter(Boolean)
-      .map(file => file.slice(0, 128)))]
+    )]
       .slice(0, 8)
     : undefined;
   return {
