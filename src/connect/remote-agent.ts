@@ -4,6 +4,11 @@
  *   Data flow: ensureConnected() opens persistent WS + INIT auth → input() sends INPUT on existing WS → handleMessage() dispatches events → resolves on OUTPUT | input() has no wall-clock deadline (ask_user runs pend on the human); the 60s-silence ping monitor detects dead connections
  *   State/Effects: owns persistent WebSocket + mutable _chatItems + _currentSession
  *   Integration: public API consumed by connect() factory and React useAgentForHuman hook
+ *   Cross-repository boundary: Core owns the native provider event vocabulary in
+ *     `connectonion/core/provider_events.py`; `chat-item-mapper.ts` normalizes it;
+ *     O Chat owns only safe Work Room rendering (`docs/WORKROOM.md`). Provider
+ *     revisions and Stop acknowledgements are authority-bearing: never synthesize
+ *     them here to make an older Host or UI appear current.
  *
  * Connect process (first input() on a fresh agent):
  *

@@ -4,6 +4,11 @@
  *   Data flow: pure function — maps server event → ChatItem mutations on the chatItems array | agent_image payloads already present in the transcript are skipped (reconnect re-delivery must not duplicate images)
  *   State/Effects: mutates chatItems array in-place (push via addItem, update existing entries)
  *   Integration: called by handlers.ts for stream event types (tool_call, llm_call, etc.)
+ *   Cross-repository boundary: ConnectOnion Core's `connectonion/core/provider_events.py`
+ *     is the authoritative OIP writer for native Codex/Claude lifecycle, artifact,
+ *     and revision fields. This module is the fail-closed browser normalizer; O Chat
+ *     renders its output in `components/chat/messages/coding-agent-workroom.tsx` under
+ *     the reader contract in `docs/WORKROOM.md`. Change all three layers together.
  */
 import { ChatItem, ChatItemType, ProviderArtifact } from './types';
 import { decodeIncomingEvent } from './wire-events';
