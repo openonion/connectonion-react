@@ -5,7 +5,7 @@
  *   State/Effects: mutates chatItems array in-place (push via addItem, update existing entries)
  *   Integration: called by handlers.ts for stream event types (tool_call, llm_call, etc.)
  */
-import { ChatItem, ChatItemType } from './types';
+import { ChatItem, ChatItemType, ProviderArtifact } from './types';
 import { decodeIncomingEvent } from './wire-events';
 
 const SUCCESSFUL_TOOL_RESULTS = new Set(['success', 'done', 'completed']);
@@ -68,6 +68,12 @@ const SAFE_PROVIDER_ACTIVITY_COPY = new Set([
   'Run a workspace command\u0000Completed a workspace command',
   'Run a workspace command\u0000A workspace command failed',
 ]);
+const SAFE_PROVIDER_ARTIFACT_ALTS = new Set([
+  'Latest provider workspace view',
+  'Latest provider browser view',
+]);
+const PROVIDER_ARTIFACT_DATA_URL = /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/;
+const MAX_PROVIDER_ARTIFACT_DATA_URL_LENGTH = 262_144;
 
 function toolResultStatus(status: unknown): 'done' | 'error' {
   return typeof status === 'string' && SUCCESSFUL_TOOL_RESULTS.has(status)
@@ -114,6 +120,80 @@ function providerPermissionMode(value: unknown) {
   return value === 'manual' || value === 'auto_approve' || value === 'full_access'
     ? value
     : undefined;
+}
+
+function providerStateRevision(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function safeProviderArtifact(
+  id: unknown,
+  kind: unknown,
+  stateRevision: unknown,
+  thumbnailDataUrl: unknown,
+  alt: unknown,
+): ProviderArtifact | undefined {
+  const revision = providerStateRevision(stateRevision);
+  if (
+    typeof id !== 'string'
+    || !/^[A-Za-z0-9._:-]{1,128}$/.test(id)
+    || kind !== 'screenshot'
+    || typeof thumbnailDataUrl !== 'string'
+    || thumbnailDataUrl.length > MAX_PROVIDER_ARTIFACT_DATA_URL_LENGTH
+    || !PROVIDER_ARTIFACT_DATA_URL.test(thumbnailDataUrl)
+    || typeof alt !== 'string'
+    || !SAFE_PROVIDER_ARTIFACT_ALTS.has(alt)
+    || revision === undefined
+  ) return undefined;
+  return {
+    id,
+    kind: 'screenshot' as const,
+    stateRevision: revision,
+    thumbnailDataUrl,
+    alt: alt as ProviderArtifact['alt'],
+  };
+}
+
+function providerArtifact(event: Record<string, unknown>): ProviderArtifact | undefined {
+  return safeProviderArtifact(
+    event.artifactId,
+    event.kind,
+    event.stateRevision,
+    event.thumbnailDataUrl,
+    event.alt,
+  );
+}
+
+/**
+ * A reconnect snapshot skips the live event mapper. Revalidate its nested
+ * artifact before exposing it to any React consumer, then require the image to
+ * match the snapshot's current provider lifecycle revision.
+ */
+export function normalizeProviderInvocationSnapshot(
+  item: Extract<ChatItem, { type: 'provider_invocation' }>,
+): Extract<ChatItem, { type: 'provider_invocation' }> {
+  const stateRevision = providerStateRevision(item.stateRevision);
+  const rawArtifact = item.artifact;
+  const rawArtifactRecord = rawArtifact && typeof rawArtifact === 'object'
+    ? rawArtifact as unknown as Record<string, unknown>
+    : undefined;
+  const artifact = rawArtifactRecord
+    ? safeProviderArtifact(
+      rawArtifactRecord.id,
+      rawArtifactRecord.kind,
+      rawArtifactRecord.stateRevision,
+      rawArtifactRecord.thumbnailDataUrl,
+      rawArtifactRecord.alt,
+    )
+    : undefined;
+  const { artifact: _artifact, stateRevision: _stateRevision, ...withoutUntrustedFields } = item;
+  return {
+    ...withoutUntrustedFields,
+    ...(stateRevision !== undefined && { stateRevision }),
+    ...(artifact && artifact.stateRevision === stateRevision && { artifact }),
+  } as Extract<ChatItem, { type: 'provider_invocation' }>;
 }
 
 function safeProviderDisplayName(provider: 'codex' | 'claude_code') {
@@ -178,6 +258,7 @@ export function mapEventToChatItem(
         decoded.errorSummary,
         SAFE_PROVIDER_INVOCATION_SUMMARIES,
       );
+      const stateRevision = providerStateRevision(decoded.stateRevision);
       const update = {
         ...(taskTitle && { taskTitle }),
         ...(currentSummary && { currentSummary }),
@@ -189,8 +270,16 @@ export function mapEventToChatItem(
           && decoded.elapsedMs >= 0 && { elapsedMs: decoded.elapsedMs }),
         ...(resultSummary && { resultSummary }),
         ...(errorSummary && { errorSummary }),
+        ...(stateRevision !== undefined && { stateRevision }),
       };
       if (existing) {
+        // Provider state is replayed after reconnect. Once a versioned Host has
+        // shown a lifecycle state, an older or unversioned frame cannot safely
+        // override it just because it arrived later on a new socket.
+        if (
+          existing.stateRevision !== undefined
+          && (stateRevision === undefined || stateRevision <= existing.stateRevision)
+        ) break;
         Object.assign(existing, update);
         // A later terminal event is authoritative over a streamed progress
         // summary. Keeping the old `currentSummary` makes a completed or failed
@@ -263,6 +352,29 @@ export function mapEventToChatItem(
         invocation.activities.push(activity);
       }
       sortProviderActivities(invocation);
+      break;
+    }
+    case 'provider_artifact': {
+      if (
+        typeof decoded.invocationId !== 'string'
+        || typeof decoded.parentToolCallId !== 'string'
+        || (decoded.provider !== 'codex' && decoded.provider !== 'claude_code')
+      ) break;
+      const invocation = providerInvocation(
+        chatItems,
+        decoded.parentToolCallId,
+        decoded.invocationId,
+      );
+      const artifact = providerArtifact(decoded);
+      // An artifact is meaningful only for the exact semantic state shown to
+      // the reader. A delayed screenshot must not decorate a newer decision
+      // or terminal state with an obsolete workspace view.
+      if (
+        !invocation
+        || !artifact
+        || invocation.stateRevision !== artifact.stateRevision
+      ) break;
+      invocation.artifact = artifact;
       break;
     }
     case 'tool_call': {

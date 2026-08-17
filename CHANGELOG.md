@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.4.2-alpha.15 — 2026-08-17
+
+Truthful current-state evidence for native Codex and Claude Code Work Rooms.
+
+### Added
+
+- Carry a positive, per-invocation `stateRevision` through the normalized
+  provider lifecycle and require a Stop acknowledgement to prove the exact
+  revision it accepted.
+- Accept an optional `provider_artifact` only when it is a bounded PNG/JPEG
+  raster for the same current lifecycle revision; expose it as a typed
+  `ProviderArtifact` rather than a provider URL or text payload.
+
+### Fixed
+
+- Preserve a newer locally rendered provider state over an older reconnect
+  snapshot, so stale activity cannot revive Stop or approval controls.
+- Revalidate nested reconnect artifacts before exposing them to React consumers;
+  missing, stale, oversized, or non-raster previews disappear safely.
+
+### Release boundary
+
+- This remains an OIP-only preview addition. Core and O Chat must upgrade as a
+  reader-before-writer pair before enabling a Host screenshot producer.
+- Publish under the npm `alpha` dist-tag; stable `latest` remains `0.4.1`.
+- O Chat will pin `0.4.2-alpha.15` after the published artifact is available
+  and repeat the long native-provider Work Room acceptance flow.
+
 ## 0.4.2-alpha.14 — 2026-08-17
 
 Truthful stop requests for native Codex and Claude Code Work Rooms.
