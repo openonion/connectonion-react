@@ -167,7 +167,7 @@ export interface UseAgentForHumanReturn {
   interrupt: () => void;
 
   /** Stop one exact native Codex/Claude provider invocation after Host acknowledgement. */
-  interruptProvider: (invocationId: string) => Promise<void>;
+  interruptProvider: (invocationId: string) => Promise<import('./connect').ProviderInterruptAcknowledgement>;
 
   /** Sign an onboard payload asynchronously. Pass the resolved result to sendMessage(). */
   signOnboard: (options: { inviteCode?: string; payment?: number }) => Promise<OutgoingMessage>;

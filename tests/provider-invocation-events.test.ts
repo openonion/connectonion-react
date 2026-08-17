@@ -1,5 +1,13 @@
-import { mapEventToChatItem } from '../src/connect/chat-item-mapper';
+import {
+  mapEventToChatItem,
+  normalizeProviderInvocationSnapshot,
+} from '../src/connect/chat-item-mapper';
 import type { ChatItem } from '../src/connect/types';
+
+const screenshot = (
+  'data:image/png;base64,'
+  + 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlRjyoAAAAASUVORK5CYII='
+);
 
 function apply(items: ChatItem[], event: Record<string, unknown>) {
   mapEventToChatItem(items, event, item => items.push(item as ChatItem));
@@ -81,6 +89,99 @@ test('an approval update replaces a stale live summary with the explicit waiting
     status: 'awaiting_approval',
     currentSummary: 'Waiting for your decision',
   });
+});
+
+test('a replay cannot regress a newer provider lifecycle revision', () => {
+  const items: ChatItem[] = [];
+  apply(items, {
+    type: 'provider_invocation', invocationId: 'codex:revision', parentToolCallId: 'revision',
+    provider: 'codex', providerDisplayName: 'Codex',
+    currentSummary: 'Working in the selected workspace', status: 'running', stateRevision: 4,
+  });
+  apply(items, {
+    type: 'provider_invocation', invocationId: 'codex:revision', parentToolCallId: 'revision',
+    provider: 'codex', providerDisplayName: 'Codex',
+    status: 'cancelled', resultSummary: 'The provider stopped', stateRevision: 5,
+  });
+  // Reconnect replay can arrive after the new terminal state. The mapper must
+  // not infer freshness from arrival time or let this old running frame revive
+  // a Work Room's controls.
+  apply(items, {
+    type: 'provider_invocation', invocationId: 'codex:revision', parentToolCallId: 'revision',
+    provider: 'codex', providerDisplayName: 'Codex',
+    currentSummary: 'Working in the selected workspace', status: 'running', stateRevision: 4,
+  });
+
+  expect(items[0]).toMatchObject({
+    type: 'provider_invocation',
+    status: 'cancelled',
+    stateRevision: 5,
+    resultSummary: 'The provider stopped',
+  });
+  expect((items[0] as Extract<ChatItem, { type: 'provider_invocation' }>).currentSummary).toBeUndefined();
+});
+
+test('accepts only a safe preview bound to the current provider state revision', () => {
+  const items: ChatItem[] = [];
+  apply(items, {
+    type: 'provider_invocation', invocationId: 'codex:preview', parentToolCallId: 'preview',
+    provider: 'codex', providerDisplayName: 'Codex', status: 'running', stateRevision: 4,
+  });
+  apply(items, {
+    type: 'provider_artifact', provider: 'codex', invocationId: 'codex:preview',
+    parentToolCallId: 'preview', artifactId: 'screen-4', kind: 'screenshot',
+    stateRevision: 4, thumbnailDataUrl: screenshot,
+    alt: 'Latest provider workspace view',
+  });
+  apply(items, {
+    type: 'provider_artifact', provider: 'codex', invocationId: 'codex:preview',
+    parentToolCallId: 'preview', artifactId: 'stale-screen', kind: 'screenshot',
+    stateRevision: 3, thumbnailDataUrl: screenshot,
+    alt: 'Latest provider browser view',
+  });
+  apply(items, {
+    type: 'provider_artifact', provider: 'codex', invocationId: 'codex:preview',
+    parentToolCallId: 'preview', artifactId: 'unsafe-screen', kind: 'screenshot',
+    stateRevision: 4, thumbnailDataUrl: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=',
+    alt: 'Latest provider workspace view',
+  });
+
+  expect(items[0]).toMatchObject({
+    type: 'provider_invocation',
+    artifact: {
+      id: 'screen-4', stateRevision: 4,
+      thumbnailDataUrl: screenshot,
+      alt: 'Latest provider workspace view',
+    },
+  });
+});
+
+test('revalidates a nested reconnect preview before exposing a snapshot', () => {
+  const snapshot: Extract<ChatItem, { type: 'provider_invocation' }> = {
+    id: 'codex:snapshot', type: 'provider_invocation', parentToolCallId: 'snapshot',
+    provider: 'codex', providerDisplayName: 'Codex', status: 'running', activities: [],
+    stateRevision: 4,
+    artifact: {
+      id: 'screen-4', kind: 'screenshot', stateRevision: 4,
+      thumbnailDataUrl: screenshot, alt: 'Latest provider workspace view',
+    },
+  };
+
+  expect(normalizeProviderInvocationSnapshot(snapshot).artifact).toEqual(snapshot.artifact);
+  expect(normalizeProviderInvocationSnapshot({
+    ...snapshot,
+    artifact: {
+      ...snapshot.artifact!,
+      stateRevision: 3,
+    },
+  }).artifact).toBeUndefined();
+  expect(normalizeProviderInvocationSnapshot({
+    ...snapshot,
+    artifact: {
+      ...snapshot.artifact!,
+      thumbnailDataUrl: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=',
+    },
+  }).artifact).toBeUndefined();
 });
 
 test('safe typed activity replaces legacy raw data and keeps native sequence order', () => {

@@ -171,6 +171,11 @@ test('resolves a scoped provider stop only after its Host acknowledgement', asyn
   const socket = new FakeSocket();
   agent._ws = socket;
   agent._authenticated = true;
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'provider_invocation', invocationId: 'codex:outer-call',
+    parentToolCallId: 'outer-call', provider: 'codex', providerDisplayName: 'Codex',
+    currentSummary: 'Working in the selected workspace', status: 'running', stateRevision: 7,
+  }) });
 
   const stopped = agent.interruptProvider('codex:outer-call');
   const request = JSON.parse(socket.sent[0]);
@@ -179,6 +184,7 @@ test('resolves a scoped provider stop only after its Host acknowledgement', asyn
     type: 'PROVIDER_INTERRUPT',
     invocationId: 'codex:outer-call',
     requestId: expect.any(String),
+    stateRevision: 7,
   }));
   expect(agent._interruptSent).toBe(false);
 
@@ -187,9 +193,13 @@ test('resolves a scoped provider stop only after its Host acknowledgement', asyn
     requestId: request.requestId,
     invocationId: 'codex:outer-call',
     accepted: true,
+    stateRevision: 7,
   }) });
 
-  await expect(stopped).resolves.toBeUndefined();
+  await expect(stopped).resolves.toEqual({
+    invocationId: 'codex:outer-call',
+    stateRevision: 7,
+  });
   expect(agent._pendingProviderInterrupt).toBeNull();
 });
 
@@ -198,6 +208,11 @@ test('returns a retryable failure when the Host rejects a scoped provider stop',
   const socket = new FakeSocket();
   agent._ws = socket;
   agent._authenticated = true;
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'provider_invocation', invocationId: 'codex:outer-call',
+    parentToolCallId: 'outer-call', provider: 'codex', providerDisplayName: 'Codex',
+    currentSummary: 'Working in the selected workspace', status: 'running', stateRevision: 3,
+  }) });
 
   const stopped = agent.interruptProvider('codex:outer-call');
   const request = JSON.parse(socket.sent[0]);
@@ -207,8 +222,55 @@ test('returns a retryable failure when the Host rejects a scoped provider stop',
     invocationId: 'codex:outer-call',
     accepted: false,
     reason: 'not_active',
+    stateRevision: 3,
   }) });
 
   await expect(stopped).rejects.toThrow('The provider run is no longer active. Try again.');
   expect(agent._pendingProviderInterrupt).toBeNull();
+});
+
+test('fails closed when a stop acknowledgement does not prove the observed revision', async () => {
+  const agent = new RemoteAgent('0x' + 'a'.repeat(64), {}) as any;
+  const socket = new FakeSocket();
+  agent._ws = socket;
+  agent._authenticated = true;
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'provider_invocation', invocationId: 'codex:outer-call',
+    parentToolCallId: 'outer-call', provider: 'codex', providerDisplayName: 'Codex',
+    currentSummary: 'Working in the selected workspace', status: 'running', stateRevision: 11,
+  }) });
+
+  const stopped = agent.interruptProvider('codex:outer-call');
+  const request = JSON.parse(socket.sent[0]);
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'PROVIDER_INTERRUPT_ACK',
+    requestId: request.requestId,
+    invocationId: 'codex:outer-call',
+    accepted: true,
+    stateRevision: 10,
+  }) });
+
+  await expect(stopped).rejects.toThrow('The Host did not prove the stop applies to the current provider state.');
+  expect(agent._pendingProviderInterrupt).toBeNull();
+});
+
+test('a reconnect snapshot cannot regress a newer local provider lifecycle', () => {
+  const agent = new RemoteAgent('0x' + 'a'.repeat(64), {}) as any;
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'provider_invocation', invocationId: 'codex:outer-call',
+    parentToolCallId: 'outer-call', provider: 'codex', providerDisplayName: 'Codex',
+    status: 'cancelled', resultSummary: 'The provider stopped', stateRevision: 9,
+  }) });
+
+  agent._mergeServerChatItems([{
+    id: 'codex:outer-call', type: 'provider_invocation',
+    parentToolCallId: 'outer-call', provider: 'codex', providerDisplayName: 'Codex',
+    status: 'running', activities: [], stateRevision: 8,
+  }]);
+
+  expect(agent.ui).toContainEqual(expect.objectContaining({
+    id: 'codex:outer-call',
+    status: 'cancelled',
+    stateRevision: 9,
+  }));
 });

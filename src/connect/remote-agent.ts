@@ -41,13 +41,13 @@
 import * as address from '../address';
 import {
   AgentInfo, AgentStatus, ApprovalMode, ChatItem, ChatItemType, CollaborationMode, ConnectionState, ExecutionProfile,
-  ConnectOptions, PermissionProfile, PlanEntry, ProviderApprovalPresentation, RemoteSessionStatus, ResolvedEndpoint, Response, SessionState, WebSocketCtor, WebSocketLike,
+  ConnectOptions, PermissionProfile, PlanEntry, ProviderApprovalPresentation, ProviderInterruptAcknowledgement, RemoteSessionStatus, ResolvedEndpoint, Response, SessionState, WebSocketCtor, WebSocketLike,
 } from './types';
 import {
   AgentInfoSource, getWebSocketCtor, generateUUID, normalizeRelayUrl, resolveEndpoint, toAgentInfo,
 } from './endpoint';
 import { ensureSigner, signPayload, type MessageSigner } from './auth';
-import { mapEventToChatItem } from './chat-item-mapper';
+import { mapEventToChatItem, normalizeProviderInvocationSnapshot } from './chat-item-mapper';
 import { OIP_PROTOCOL, OipCompatibilityError, supportsOip } from './protocol';
 import {
   isCanonicalPermissionProfile,
@@ -84,7 +84,8 @@ interface PendingPermissionProfileChange {
 interface PendingProviderInterrupt {
   requestId: string;
   invocationId: string;
-  resolve: () => void;
+  stateRevision: number;
+  resolve: (acknowledgement: ProviderInterruptAcknowledgement) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -111,7 +112,17 @@ function providerInterruptError(reason: unknown): Error {
   if (reason === 'invalid_request') {
     return new Error('The stop request was invalid. Try again.');
   }
+  if (reason === 'state_changed') {
+    return new Error('The provider state changed before the stop request. Wait for the Work Room to refresh, then try again.');
+  }
+  if (reason === 'state_unconfirmed' || reason === 'invalid_revision') {
+    return new Error('The Host could not confirm the current provider state. Refresh the Work Room, then try again.');
+  }
   return new Error('The Host rejected the stop request. Try again.');
+}
+
+function providerStateRevision(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
 
 function providerApprovalContext(data: Record<string, unknown>) {
@@ -618,16 +629,24 @@ export class RemoteAgent {
    * enclosing OIP turn. Resolution means the Host accepted this exact target;
    * the later terminal provider event remains the authoritative stopped state.
    */
-  interruptProvider(invocationId: string): Promise<void> {
+  interruptProvider(invocationId: string): Promise<ProviderInterruptAcknowledgement> {
     if (!invocationId || invocationId.length > 512) {
       return Promise.reject(new Error('A valid provider run is required to stop it.'));
     }
     if (this._pendingProviderInterrupt) {
       return Promise.reject(new Error('A provider stop request is already pending.'));
     }
+    const invocation = this._chatItems.find(
+      (item): item is Extract<ChatItem, { type: 'provider_invocation' }> =>
+        item.type === 'provider_invocation' && item.id === invocationId,
+    );
+    if (!providerStateRevision(invocation?.stateRevision)) {
+      return Promise.reject(new Error('The provider state is not ready to stop. Wait for the Work Room to refresh.'));
+    }
 
     const requestId = generateUUID();
-    return new Promise<void>((resolve, reject) => {
+    const stateRevision = invocation.stateRevision;
+    return new Promise<ProviderInterruptAcknowledgement>((resolve, reject) => {
       const timer = setTimeout(() => {
         const pending = this._pendingProviderInterrupt;
         if (pending?.requestId !== requestId) return;
@@ -639,13 +658,19 @@ export class RemoteAgent {
       const pending: PendingProviderInterrupt = {
         requestId,
         invocationId,
+        stateRevision,
         resolve,
         reject,
         timer,
       };
       this._pendingProviderInterrupt = pending;
       try {
-        this._sendAuthenticated({ type: 'PROVIDER_INTERRUPT', invocationId, requestId });
+        this._sendAuthenticated({
+          type: 'PROVIDER_INTERRUPT',
+          invocationId,
+          requestId,
+          stateRevision,
+        });
       } catch (cause) {
         this._rejectProviderInterrupt(
           pending,
@@ -659,7 +684,10 @@ export class RemoteAgent {
     if (this._pendingProviderInterrupt !== pending) return;
     clearTimeout(pending.timer);
     this._pendingProviderInterrupt = null;
-    pending.resolve();
+    pending.resolve({
+      invocationId: pending.invocationId,
+      stateRevision: pending.stateRevision,
+    });
     this._onMessage?.();
   }
 
@@ -1032,7 +1060,13 @@ export class RemoteAgent {
   // [...userItems, ...serverNonUserItems] reorders into [user, user, agent, agent]
   // when the client added an optimistic user before reconnecting.
   private _mergeServerChatItems(value: unknown): void {
-    const serverItems = normalizeChatItems(value);
+    const serverItems = this._preserveNewerProviderStates(
+      normalizeChatItems(value).map((item) => (
+        item.type === 'provider_invocation'
+          ? normalizeProviderInvocationSnapshot(item)
+          : item
+      )),
+    );
     const serverUserCount = serverItems.filter(i => i.type === 'user').length;
     let seen = 0;
     let cutoff = this._chatItems.length;
@@ -1056,6 +1090,33 @@ export class RemoteAgent {
       }
     }
     this._chatItems = [...serverItems, ...this._chatItems.slice(cutoff)];
+  }
+
+  /**
+   * A reconnect snapshot can be older than a provider frame already rendered
+   * on this socket. Preserve the versioned local lifecycle instead of using
+   * array replacement to revive controls from the stale snapshot.
+   */
+  private _preserveNewerProviderStates(serverItems: ChatItem[]): ChatItem[] {
+    const localByInvocation = new Map(
+      this._chatItems.flatMap((item) => (
+        item.type === 'provider_invocation' && providerStateRevision(item.stateRevision)
+          ? [[item.id, item] as const]
+          : []
+      )),
+    );
+    return serverItems.map((item) => {
+      if (item.type !== 'provider_invocation') return item;
+      const local = localByInvocation.get(item.id);
+      if (
+        local
+        && (
+          !providerStateRevision(item.stateRevision)
+          || item.stateRevision <= local.stateRevision!
+        )
+      ) return local;
+      return item;
+    });
   }
 
   // --- Private: connection lifecycle ---
@@ -1181,6 +1242,16 @@ export class RemoteAgent {
         || data.invocationId !== pending.invocationId
       ) return;
       if (data.accepted === true) {
+        if (
+          !providerStateRevision(data.stateRevision)
+          || data.stateRevision !== pending.stateRevision
+        ) {
+          this._rejectProviderInterrupt(
+            pending,
+            new Error('The Host did not prove the stop applies to the current provider state.'),
+          );
+          return;
+        }
         this._resolveProviderInterrupt(pending);
       } else {
         this._rejectProviderInterrupt(pending, providerInterruptError(data.reason));
@@ -1330,7 +1401,7 @@ export class RemoteAgent {
     if (data?.type === 'llm_call' || data?.type === 'llm_result' ||
         data?.type === 'tool_call' || data?.type === 'tool_result' ||
         data?.type === 'tool_call_update' || data?.type === 'provider_invocation' ||
-        data?.type === 'provider_activity' ||
+        data?.type === 'provider_activity' || data?.type === 'provider_artifact' ||
         data?.type === 'thinking' || data?.type === 'assistant' ||
         data?.type === 'agent_image' ||
         data?.type === 'intent' || data?.type === 'eval' || data?.type === 'compact' ||

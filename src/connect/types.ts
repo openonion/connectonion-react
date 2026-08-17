@@ -18,6 +18,12 @@ export interface Response {
 
 export type ProviderInvocationStatus = 'starting' | 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled';
 
+/** Proof that a scoped Stop applies to the exact Work Room lifecycle state seen by the browser. */
+export interface ProviderInterruptAcknowledgement {
+  invocationId: string;
+  stateRevision: number;
+}
+
 /** Safe semantic categories shared by the native Codex and Claude Code adapters. */
 export type ProviderActivityKind = 'command' | 'file_change' | 'inspect' | 'search' | 'tool';
 
@@ -38,6 +44,15 @@ export interface ProviderActivity {
   legacy?: boolean;
 }
 
+/** A Host-captured raster preview, bound to one provider lifecycle revision. */
+export interface ProviderArtifact {
+  id: string;
+  kind: 'screenshot';
+  stateRevision: number;
+  thumbnailDataUrl: string;
+  alt: 'Latest provider workspace view' | 'Latest provider browser view';
+}
+
 export interface ProviderInvocationItem {
   id: string;
   type: 'provider_invocation';
@@ -49,6 +64,10 @@ export interface ProviderInvocationItem {
   taskSummary?: string;
   /** Safe current state, never raw provider output. */
   currentSummary?: string;
+  /** Monotonic semantic state version; protects reconnect replay from reviving stale controls. */
+  stateRevision?: number;
+  /** Optional real preview; absent means the UI must not fabricate a thumbnail. */
+  artifact?: ProviderArtifact;
   permissionMode?: 'manual' | 'auto_approve' | 'full_access';
   status: ProviderInvocationStatus;
   activities: ProviderActivity[];
