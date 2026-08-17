@@ -46,7 +46,7 @@
 import * as address from '../address';
 import {
   AgentInfo, AgentStatus, ApprovalMode, ChatItem, ChatItemType, CollaborationMode, ConnectionState, ExecutionProfile,
-  ConnectOptions, PermissionProfile, PlanEntry, ProviderApprovalPresentation, ProviderInterruptAcknowledgement, RemoteSessionStatus, ResolvedEndpoint, Response, SessionState, WebSocketCtor, WebSocketLike,
+  ConnectOptions, PermissionProfile, PlanEntry, ProviderApprovalPresentation, ProviderInputAcknowledgement, ProviderInterruptAcknowledgement, RemoteSessionStatus, ResolvedEndpoint, Response, SessionState, WebSocketCtor, WebSocketLike,
 } from './types';
 import {
   AgentInfoSource, getWebSocketCtor, generateUUID, normalizeRelayUrl, resolveEndpoint, toAgentInfo,
@@ -95,6 +95,15 @@ interface PendingProviderInterrupt {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface PendingProviderInput {
+  requestId: string;
+  invocationId: string;
+  stateRevision: number;
+  resolve: (acknowledgement: ProviderInputAcknowledgement) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 interface ReconnectReadyWaiter {
   resolve: () => void;
   reject: (error: Error) => void;
@@ -102,6 +111,7 @@ interface ReconnectReadyWaiter {
 
 const PERMISSION_PROFILE_CHANGE_TIMEOUT_MS = 30000;
 const PROVIDER_INTERRUPT_ACK_TIMEOUT_MS = 10000;
+const PROVIDER_INPUT_ACK_TIMEOUT_MS = 10000;
 const WEBSOCKET_OPEN = 1;
 
 function approvalRejectMode(value: unknown): ApprovalRejectMode {
@@ -124,6 +134,15 @@ function providerInterruptError(reason: unknown): Error {
     return new Error('The Host could not confirm the current provider state. Refresh the Work Room, then try again.');
   }
   return new Error('The Host rejected the stop request. Try again.');
+}
+
+function providerInputError(reason: unknown): Error {
+  if (reason === 'not_active') return new Error('This Codex session is not available to continue. Refresh the Work Room and try again.');
+  if (reason === 'unsupported_provider') return new Error('Only Codex Work Rooms accept direct messages.');
+  if (reason === 'state_changed') return new Error('Codex changed state before the message was sent. Wait for the Work Room to refresh, then try again.');
+  if (reason === 'state_unconfirmed') return new Error('The Host could not confirm the Codex state. Refresh the Work Room, then try again.');
+  if (reason === 'invalid_request' || reason === 'invalid_revision') return new Error('The message could not be sent. Check it and try again.');
+  return new Error('The Host rejected the Codex message. Try again.');
 }
 
 function providerStateRevision(value: unknown): value is number {
@@ -259,6 +278,7 @@ export class RemoteAgent {
   private _permissionProfileState: HostSessionModeState | null = null;
   private _interruptSent = false;
   private _pendingProviderInterrupt: PendingProviderInterrupt | null = null;
+  private _pendingProviderInput: PendingProviderInput | null = null;
 
   // Promise resolution for current input() call
   private _inputResolve: ((value: Response) => void) | null = null;
@@ -564,6 +584,13 @@ export class RemoteAgent {
       ).catch(() => {});
       return;
     }
+    if (message.type === 'PROVIDER_INPUT') {
+      void this.sendProviderInput(
+        typeof message.invocationId === 'string' ? message.invocationId : '',
+        typeof message.text === 'string' ? message.text : '',
+      ).catch(() => {});
+      return;
+    }
     if (message.type === 'ONBOARD_SUBMIT') {
       this._sendOpen(message);
     } else {
@@ -685,6 +712,63 @@ export class RemoteAgent {
     });
   }
 
+  /**
+   * Send a message directly to a native Codex Work Room. A live turn receives
+   * `turn/steer`; a terminal, owned thread is resumed by the Host without an
+   * outer COAI turn. Resolution only confirms that precise Host handoff.
+   */
+  sendProviderInput(invocationId: string, text: string): Promise<ProviderInputAcknowledgement> {
+    const content = text.trim();
+    if (!invocationId || invocationId.length > 512 || !content || content.length > 12_000) {
+      return Promise.reject(new Error('Enter a message up to 12,000 characters for Codex.'));
+    }
+    if (this._pendingProviderInput) {
+      return Promise.reject(new Error('A Codex message is already being sent.'));
+    }
+    const invocation = this._chatItems.find(
+      (item): item is Extract<ChatItem, { type: 'provider_invocation' }> =>
+        item.type === 'provider_invocation' && item.id === invocationId,
+    );
+    if (invocation?.provider !== 'codex' || !providerStateRevision(invocation.stateRevision)) {
+      return Promise.reject(new Error('The Codex Work Room is not ready to receive a message.'));
+    }
+    const requestId = generateUUID();
+    const stateRevision = invocation.stateRevision;
+    return new Promise<ProviderInputAcknowledgement>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const pending = this._pendingProviderInput;
+        if (pending?.requestId !== requestId) return;
+        this._rejectProviderInput(
+          pending,
+          new Error('The Host did not confirm the Codex message. You can try again.'),
+        );
+      }, PROVIDER_INPUT_ACK_TIMEOUT_MS);
+      const pending: PendingProviderInput = {
+        requestId,
+        invocationId,
+        stateRevision,
+        resolve,
+        reject,
+        timer,
+      };
+      this._pendingProviderInput = pending;
+      try {
+        this._sendAuthenticated({
+          type: 'PROVIDER_INPUT',
+          invocationId,
+          requestId,
+          stateRevision,
+          text: content,
+        });
+      } catch (cause) {
+        this._rejectProviderInput(
+          pending,
+          cause instanceof Error ? cause : new Error(String(cause)),
+        );
+      }
+    });
+  }
+
   private _resolveProviderInterrupt(pending: PendingProviderInterrupt): void {
     if (this._pendingProviderInterrupt !== pending) return;
     clearTimeout(pending.timer);
@@ -703,6 +787,25 @@ export class RemoteAgent {
     if (this._pendingProviderInterrupt !== pending) return;
     clearTimeout(pending.timer);
     this._pendingProviderInterrupt = null;
+    pending.reject(error);
+    this._onMessage?.();
+  }
+
+  private _resolveProviderInput(pending: PendingProviderInput): void {
+    if (this._pendingProviderInput !== pending) return;
+    clearTimeout(pending.timer);
+    this._pendingProviderInput = null;
+    pending.resolve({
+      invocationId: pending.invocationId,
+      stateRevision: pending.stateRevision,
+    });
+    this._onMessage?.();
+  }
+
+  private _rejectProviderInput(pending: PendingProviderInput, error: Error): void {
+    if (this._pendingProviderInput !== pending) return;
+    clearTimeout(pending.timer);
+    this._pendingProviderInput = null;
     pending.reject(error);
     this._onMessage?.();
   }
@@ -946,6 +1049,12 @@ export class RemoteAgent {
       this._rejectProviderInterrupt(
         this._pendingProviderInterrupt,
         new Error('Connection reset before the stop request was acknowledged.'),
+      );
+    }
+    if (this._pendingProviderInput) {
+      this._rejectProviderInput(
+        this._pendingProviderInput,
+        new Error('Connection reset before the Codex message was acknowledged.'),
       );
     }
     this._connectionEpoch += 1;
@@ -1264,6 +1373,31 @@ export class RemoteAgent {
       return;
     }
 
+    if (data?.type === 'PROVIDER_INPUT_ACK') {
+      const pending = this._pendingProviderInput;
+      if (
+        !pending
+        || data.requestId !== pending.requestId
+        || data.invocationId !== pending.invocationId
+      ) return;
+      if (data.accepted === true) {
+        if (
+          !providerStateRevision(data.stateRevision)
+          || data.stateRevision !== pending.stateRevision
+        ) {
+          this._rejectProviderInput(
+            pending,
+            new Error('The Host did not prove the message applies to the current Codex state.'),
+          );
+          return;
+        }
+        this._resolveProviderInput(pending);
+      } else {
+        this._rejectProviderInput(pending, providerInputError(data.reason));
+      }
+      return;
+    }
+
     // CONNECTED — resolve ensureConnected() promise
     if (data?.type === 'CONNECTED') {
       if (!supportsOip(data.protocol)) {
@@ -1407,6 +1541,7 @@ export class RemoteAgent {
         data?.type === 'tool_call' || data?.type === 'tool_result' ||
         data?.type === 'tool_call_update' || data?.type === 'provider_invocation' ||
         data?.type === 'provider_activity' || data?.type === 'provider_artifact' ||
+        data?.type === 'provider_message' ||
         data?.type === 'thinking' || data?.type === 'assistant' ||
         data?.type === 'agent_image' ||
         data?.type === 'intent' || data?.type === 'eval' || data?.type === 'compact' ||
@@ -1680,6 +1815,12 @@ export class RemoteAgent {
         new Error('Connection closed before the stop request was acknowledged.'),
       );
     }
+    if (this._pendingProviderInput) {
+      this._rejectProviderInput(
+        this._pendingProviderInput,
+        new Error('Connection closed before the Codex message was acknowledged.'),
+      );
+    }
 
     if (this._pendingPermissionProfileChange) {
       this._rejectPermissionProfileChange(
@@ -1796,6 +1937,12 @@ export class RemoteAgent {
       this._rejectProviderInterrupt(
         this._pendingProviderInterrupt,
         new Error('Connection closed before the stop request was acknowledged.'),
+      );
+    }
+    if (this._pendingProviderInput) {
+      this._rejectProviderInput(
+        this._pendingProviderInput,
+        new Error('Connection closed before the Codex message was acknowledged.'),
       );
     }
     if (this._ws) {

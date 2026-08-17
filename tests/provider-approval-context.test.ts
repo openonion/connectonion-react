@@ -166,6 +166,29 @@ test('forwards safe provider activity through the live RemoteAgent dispatcher', 
   }));
 });
 
+test('forwards a bounded native Codex message through the live dispatcher', () => {
+  const agent = new RemoteAgent('0x' + 'a'.repeat(64), {}) as any;
+  agent._ws = new FakeSocket();
+
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'provider_invocation', invocationId: 'codex:outer-call',
+    parentToolCallId: 'outer-call', provider: 'codex', providerDisplayName: 'Codex',
+    status: 'running', stateRevision: 7,
+  }) });
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'provider_message', provider: 'codex', invocationId: 'codex:outer-call',
+    parentToolCallId: 'outer-call', messageId: 'assistant:1', role: 'assistant',
+    text: 'The reverse-order fixture passes.',
+  }) });
+
+  expect(agent.ui).toContainEqual(expect.objectContaining({
+    id: 'codex:outer-call',
+    messages: [{
+      id: 'assistant:1', role: 'assistant', text: 'The reverse-order fixture passes.',
+    }],
+  }));
+});
+
 test('resolves a scoped provider stop only after its Host acknowledgement', async () => {
   const agent = new RemoteAgent('0x' + 'a'.repeat(64), {}) as any;
   const socket = new FakeSocket();
@@ -201,6 +224,73 @@ test('resolves a scoped provider stop only after its Host acknowledgement', asyn
     stateRevision: 7,
   });
   expect(agent._pendingProviderInterrupt).toBeNull();
+});
+
+test('resolves a direct Codex Work Room message only after its matching Host acknowledgement', async () => {
+  const agent = new RemoteAgent('0x' + 'a'.repeat(64), {}) as any;
+  const socket = new FakeSocket();
+  agent._ws = socket;
+  agent._authenticated = true;
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'provider_invocation', invocationId: 'codex:outer-call',
+    parentToolCallId: 'outer-call', provider: 'codex', providerDisplayName: 'Codex',
+    currentSummary: 'Working in the selected workspace', status: 'running', stateRevision: 7,
+  }) });
+
+  const sent = agent.sendProviderInput(
+    'codex:outer-call',
+    'Please add a reverse-order fixture.',
+  );
+  const request = JSON.parse(socket.sent[0]);
+  expect(request).toEqual(expect.objectContaining({
+    type: 'PROVIDER_INPUT',
+    invocationId: 'codex:outer-call',
+    requestId: expect.any(String),
+    stateRevision: 7,
+    text: 'Please add a reverse-order fixture.',
+  }));
+  expect(request.type).not.toBe('INPUT');
+
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'PROVIDER_INPUT_ACK',
+    requestId: request.requestId,
+    invocationId: 'codex:outer-call',
+    accepted: true,
+    stateRevision: 7,
+  }) });
+
+  await expect(sent).resolves.toEqual({
+    invocationId: 'codex:outer-call',
+    stateRevision: 7,
+  });
+  expect(agent._pendingProviderInput).toBeNull();
+});
+
+test('fails closed when a direct Codex acknowledgement has a different revision', async () => {
+  const agent = new RemoteAgent('0x' + 'a'.repeat(64), {}) as any;
+  const socket = new FakeSocket();
+  agent._ws = socket;
+  agent._authenticated = true;
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'provider_invocation', invocationId: 'codex:outer-call',
+    parentToolCallId: 'outer-call', provider: 'codex', providerDisplayName: 'Codex',
+    status: 'completed', stateRevision: 4,
+  }) });
+
+  const sent = agent.sendProviderInput('codex:outer-call', 'Continue the test.');
+  const request = JSON.parse(socket.sent[0]);
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'PROVIDER_INPUT_ACK',
+    requestId: request.requestId,
+    invocationId: 'codex:outer-call',
+    accepted: true,
+    stateRevision: 5,
+  }) });
+
+  await expect(sent).rejects.toThrow(
+    'The Host did not prove the message applies to the current Codex state.',
+  );
+  expect(agent._pendingProviderInput).toBeNull();
 });
 
 test('returns a retryable failure when the Host rejects a scoped provider stop', async () => {

@@ -69,6 +69,53 @@ test('replayed duplicate child events update instead of duplicating', () => {
   expect(items[0].type === 'provider_invocation' && items[0].activities).toHaveLength(1);
 });
 
+test('groups bounded direct provider messages by explicit Work Room lineage', () => {
+  const items: ChatItem[] = [];
+  apply(items, {
+    type: 'provider_invocation', invocationId: 'codex:root', parentToolCallId: 'root',
+    provider: 'codex', providerDisplayName: 'Codex', status: 'completed',
+    stateRevision: 3, workroomId: 'codex:root',
+  });
+  apply(items, {
+    type: 'provider_message', provider: 'codex', invocationId: 'codex:root',
+    parentToolCallId: 'root', messageId: 'assistant:1', role: 'assistant',
+    text: 'The current test suite is passing.',
+  });
+  apply(items, {
+    type: 'provider_invocation', invocationId: 'codex:continued', parentToolCallId: 'continued',
+    provider: 'codex', providerDisplayName: 'Codex', status: 'running',
+    stateRevision: 1, workroomId: 'codex:root', continuationOf: 'codex:root',
+  });
+  apply(items, {
+    type: 'provider_message', provider: 'codex', invocationId: 'codex:continued',
+    parentToolCallId: 'continued', messageId: 'user:2', role: 'user',
+    text: 'Please add a reverse-order fixture.',
+  });
+  apply(items, {
+    type: 'provider_message', provider: 'codex', invocationId: 'codex:continued',
+    parentToolCallId: 'continued', messageId: 'unsafe', role: 'assistant',
+    text: 'x'.repeat(16_001),
+  });
+
+  expect(items).toEqual([
+    expect.objectContaining({
+      id: 'codex:root',
+      workroomId: 'codex:root',
+      messages: [{
+        id: 'assistant:1', role: 'assistant', text: 'The current test suite is passing.',
+      }],
+    }),
+    expect.objectContaining({
+      id: 'codex:continued',
+      workroomId: 'codex:root',
+      continuationOf: 'codex:root',
+      messages: [{
+        id: 'user:2', role: 'user', text: 'Please add a reverse-order fixture.',
+      }],
+    }),
+  ]);
+});
+
 test('an approval update replaces a stale live summary with the explicit waiting state', () => {
   const items: ChatItem[] = [{
     id: 'call-7', type: 'tool_call', name: 'codex', status: 'running', args: {},
