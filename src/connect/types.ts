@@ -24,6 +24,19 @@ export interface ProviderInterruptAcknowledgement {
   stateRevision: number;
 }
 
+/** Proof that a direct Work Room message was accepted for this Codex state. */
+export interface ProviderInputAcknowledgement {
+  invocationId: string;
+  stateRevision: number;
+}
+
+/** Plain-text conversation content explicitly exchanged with a native provider. */
+export interface ProviderMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+}
+
 /** Safe semantic categories shared by the native Codex and Claude Code adapters. */
 export type ProviderActivityKind = 'command' | 'file_change' | 'inspect' | 'search' | 'tool';
 
@@ -59,6 +72,10 @@ export interface ProviderInvocationItem {
   parentToolCallId: string;
   provider: 'codex' | 'claude_code';
   providerDisplayName: string;
+  /** Stable Work Room conversation grouping; continuations keep this value. */
+  workroomId?: string;
+  /** The initial invocation this native continuation resumes. */
+  continuationOf?: string;
   /** Safe provider-generated task category. Preferred over legacy taskSummary. */
   taskTitle?: string;
   taskSummary?: string;
@@ -71,6 +88,8 @@ export interface ProviderInvocationItem {
   permissionMode?: 'manual' | 'auto_approve' | 'full_access';
   status: ProviderInvocationStatus;
   activities: ProviderActivity[];
+  /** Direct user/Codex conversation, separate from redacted execution activity. */
+  messages?: ProviderMessage[];
   sessionId?: string;
   elapsedMs?: number;
   /** Safe terminal outcome. Preferred over legacy result/error fields. */

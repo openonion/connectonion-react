@@ -168,6 +168,8 @@ export interface UseAgentForHumanReturn {
 
   /** Stop one exact native Codex/Claude provider invocation after Host acknowledgement. */
   interruptProvider: (invocationId: string) => Promise<import('./connect').ProviderInterruptAcknowledgement>;
+  /** Send text directly to an owned native Codex Work Room. */
+  sendProviderInput: (invocationId: string, text: string) => Promise<import('./connect').ProviderInputAcknowledgement>;
 
   /** Sign an onboard payload asynchronously. Pass the resolved result to sendMessage(). */
   signOnboard: (options: { inviteCode?: string; payment?: number }) => Promise<OutgoingMessage>;
@@ -467,6 +469,7 @@ export function useAgentForHuman(
 
   const interrupt = () => agent.interrupt();
   const interruptProvider = (invocationId: string) => agent.interruptProvider(invocationId);
+  const sendProviderInput = (invocationId: string, text: string) => agent.sendProviderInput(invocationId, text);
 
   const setMode = (newMode: ApprovalMode, options?: { turns?: number }) => {
     const isCollaborationMode = newMode === 'default' || newMode === 'plan';
@@ -532,6 +535,7 @@ export function useAgentForHuman(
     respondToApproval,
     interrupt,
     interruptProvider,
+    sendProviderInput,
     signOnboard: (options: { inviteCode?: string; payment?: number }) => agent.signOnboard(options),
     setMode,
     setCollaborationMode,

@@ -79,6 +79,8 @@ const SAFE_PROVIDER_ARTIFACT_ALTS = new Set([
 ]);
 const PROVIDER_ARTIFACT_DATA_URL = /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/;
 const MAX_PROVIDER_ARTIFACT_DATA_URL_LENGTH = 262_144;
+const PROVIDER_CORRELATION_ID = /^[A-Za-z0-9._:-]{1,512}$/;
+const MAX_PROVIDER_MESSAGE_LENGTH = 16_000;
 
 function toolResultStatus(status: unknown): 'done' | 'error' {
   return typeof status === 'string' && SUCCESSFUL_TOOL_RESULTS.has(status)
@@ -131,6 +133,34 @@ function providerStateRevision(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
     ? value
     : undefined;
+}
+
+function providerCorrelationId(value: unknown): string | undefined {
+  return typeof value === 'string' && PROVIDER_CORRELATION_ID.test(value)
+    ? value
+    : undefined;
+}
+
+function providerMessages(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  return value.flatMap((raw) => {
+    if (!raw || typeof raw !== 'object') return [];
+    const message = raw as Record<string, unknown>;
+    const id = providerCorrelationId(message.id);
+    const role = message.role;
+    const text = message.text;
+    if (
+      !id
+      || seen.has(id)
+      || (role !== 'user' && role !== 'assistant')
+      || typeof text !== 'string'
+      || !text.trim()
+      || text.length > MAX_PROVIDER_MESSAGE_LENGTH
+    ) return [];
+    seen.add(id);
+    return [{ id, role, text: text.trim() }];
+  });
 }
 
 function safeProviderArtifact(
@@ -193,9 +223,22 @@ export function normalizeProviderInvocationSnapshot(
       rawArtifactRecord.alt,
     )
     : undefined;
-  const { artifact: _artifact, stateRevision: _stateRevision, ...withoutUntrustedFields } = item;
+  const workroomId = providerCorrelationId(item.workroomId);
+  const continuationOf = providerCorrelationId(item.continuationOf);
+  const messages = providerMessages(item.messages);
+  const {
+    artifact: _artifact,
+    stateRevision: _stateRevision,
+    workroomId: _workroomId,
+    continuationOf: _continuationOf,
+    messages: _messages,
+    ...withoutUntrustedFields
+  } = item;
   return {
     ...withoutUntrustedFields,
+    messages,
+    ...(workroomId && { workroomId }),
+    ...(continuationOf && { continuationOf }),
     ...(stateRevision !== undefined && { stateRevision }),
     ...(artifact && artifact.stateRevision === stateRevision && { artifact }),
   } as Extract<ChatItem, { type: 'provider_invocation' }>;
@@ -264,6 +307,8 @@ export function mapEventToChatItem(
         SAFE_PROVIDER_INVOCATION_SUMMARIES,
       );
       const stateRevision = providerStateRevision(decoded.stateRevision);
+      const workroomId = providerCorrelationId(decoded.workroomId);
+      const continuationOf = providerCorrelationId(decoded.continuationOf);
       const update = {
         ...(taskTitle && { taskTitle }),
         ...(currentSummary && { currentSummary }),
@@ -276,6 +321,8 @@ export function mapEventToChatItem(
         ...(resultSummary && { resultSummary }),
         ...(errorSummary && { errorSummary }),
         ...(stateRevision !== undefined && { stateRevision }),
+        ...(workroomId && { workroomId }),
+        ...(continuationOf && { continuationOf }),
       };
       if (existing) {
         // Provider state is replayed after reconnect. Once a versioned Host has
@@ -306,6 +353,7 @@ export function mapEventToChatItem(
             ? decoded.status : 'running'
         ) as Extract<ChatItem, { type: 'provider_invocation' }>['status'],
         activities: [],
+        messages: [],
         ...update,
       } as Extract<ChatItem, { type: 'provider_invocation' }>;
       const parentIndex = chatItems.findIndex(
@@ -380,6 +428,34 @@ export function mapEventToChatItem(
         || invocation.stateRevision !== artifact.stateRevision
       ) break;
       invocation.artifact = artifact;
+      break;
+    }
+    case 'provider_message': {
+      if (
+        (decoded.provider !== 'codex' && decoded.provider !== 'claude_code')
+        || typeof decoded.invocationId !== 'string'
+        || typeof decoded.parentToolCallId !== 'string'
+      ) break;
+      const invocation = providerInvocation(
+        chatItems,
+        decoded.parentToolCallId,
+        decoded.invocationId,
+      );
+      const id = providerCorrelationId(decoded.messageId);
+      const text = decoded.text;
+      if (
+        !invocation
+        || !id
+        || (decoded.role !== 'user' && decoded.role !== 'assistant')
+        || typeof text !== 'string'
+        || !text.trim()
+        || text.length > MAX_PROVIDER_MESSAGE_LENGTH
+      ) break;
+      const message = { id, role: decoded.role, text: text.trim() } as const;
+      const messages = invocation.messages || (invocation.messages = []);
+      const existing = messages.find(item => item.id === id);
+      if (existing) Object.assign(existing, message);
+      else messages.push(message);
       break;
     }
     case 'tool_call': {
