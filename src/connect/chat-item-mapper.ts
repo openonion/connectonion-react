@@ -15,7 +15,7 @@ import { decodeIncomingEvent } from './wire-events';
 
 const SUCCESSFUL_TOOL_RESULTS = new Set(['success', 'done', 'completed']);
 const RUNNING_TOOL_STATUSES = new Set(['pending', 'running', 'in_progress']);
-const MAX_TOOL_REASON_LENGTH = 240;
+const MAX_TOOL_SUMMARY_LENGTH = 240;
 const PROVIDER_STATUSES = new Set([
   'starting', 'running', 'awaiting_approval', 'completed', 'failed', 'cancelled',
 ]);
@@ -461,7 +461,7 @@ export function mapEventToChatItem(
     }
     case 'tool_call': {
       const toolId = (decoded.tool_id || decoded.id) as string;
-      const reason = boundedToolReason(decoded.reason);
+      const summary = boundedToolSummary(decoded.summary);
       const invocation = providerInvocation(
         chatItems,
         decoded.parentToolCallId,
@@ -474,7 +474,7 @@ export function mapEventToChatItem(
           id: toolId,
           name: decoded.name as string,
           args: decoded.args as Record<string, unknown>,
-          ...(reason ? { reason } : {}),
+          ...(summary ? { summary } : {}),
           status: toolStartStatus(decoded.status),
           legacy: true,
         };
@@ -489,7 +489,7 @@ export function mapEventToChatItem(
       if (existing) {
         existing.name = decoded.name as string;
         existing.args = decoded.args as Record<string, unknown>;
-        if (reason) existing.reason = reason;
+        if (summary) existing.summary = summary;
         existing.status = toolStartStatus(decoded.status);
         break;
       }
@@ -498,7 +498,7 @@ export function mapEventToChatItem(
         id: toolId,
         name: decoded.name as string,
         args: decoded.args as Record<string, unknown>,
-        ...(reason ? { reason } : {}),
+        ...(summary ? { summary } : {}),
         status: toolStartStatus(decoded.status),
       });
       break;
@@ -506,7 +506,7 @@ export function mapEventToChatItem(
 
     case 'tool_call_update': {
       const toolId = (decoded.tool_id || decoded.id) as string;
-      const reason = boundedToolReason(decoded.reason);
+      const summary = boundedToolSummary(decoded.summary);
       const invocation = providerInvocation(
         chatItems,
         decoded.parentToolCallId,
@@ -519,7 +519,7 @@ export function mapEventToChatItem(
           activity.status = RUNNING_TOOL_STATUSES.has(String(decoded.status))
             ? 'running' : toolResultStatus(decoded.status);
           if (typeof decoded.result === 'string') activity.result = decoded.result;
-          if (reason) activity.reason = reason;
+          if (summary) activity.summary = summary;
         }
         break;
       }
@@ -536,7 +536,7 @@ export function mapEventToChatItem(
         if (decoded.args && typeof decoded.args === 'object') {
           existing.args = decoded.args as Record<string, unknown>;
         }
-        if (reason) existing.reason = reason;
+        if (summary) existing.summary = summary;
         if (typeof decoded.result === 'string') existing.result = decoded.result;
         if (typeof decoded.timing_ms === 'number') {
           existing.timing_ms = decoded.timing_ms;
@@ -730,10 +730,10 @@ export function mapEventToChatItem(
   return true;
 }
 
-function boundedToolReason(value: unknown): string | undefined {
+function boundedToolSummary(value: unknown): string | undefined {
   return typeof value === 'string'
     && value.trim().length > 0
-    && value.length <= MAX_TOOL_REASON_LENGTH
+    && value.length <= MAX_TOOL_SUMMARY_LENGTH
     ? value
     : undefined;
 }

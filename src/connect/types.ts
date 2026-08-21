@@ -45,8 +45,6 @@ export interface ProviderActivity {
   /** Present for the old generic tool fallback only. */
   name?: string;
   args?: Record<string, unknown>;
-  /** Model-written what-and-why copy for legacy generic tool activity. */
-  reason?: string;
   status: 'running' | 'done' | 'error';
   result?: string;
   /** Stable provider order; present for typed OIP activity events. */
@@ -141,7 +139,7 @@ export type ChatItem =
   | { id: string; type: 'user'; content: string; images?: string[]; files?: FileAttachment[] }
   | { id: string; type: 'agent'; content: string; images?: string[] }
   | { id: string; type: 'thinking'; status: 'running' | 'done' | 'error'; model?: string; duration_ms?: number; content?: string; kind?: string; context_percent?: number; usage?: { input_tokens?: number; output_tokens?: number; prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; cost?: number } }
-  | { id: string; type: 'tool_call'; name: string; args?: Record<string, unknown>; reason?: string; status: 'running' | 'done' | 'error'; result?: string; timing_ms?: number }
+  | { id: string; type: 'tool_call'; name: string; args?: Record<string, unknown>; summary?: string; status: 'running' | 'done' | 'error'; result?: string; timing_ms?: number }
   | ProviderInvocationItem
   | { id: string; type: 'ask_user'; text: string; options: string[]; multi_select: boolean; input_type?: string; fields?: AskUserField[]; answered?: boolean; answer?: string }
   | ({ id: string; type: 'approval_needed'; tool: string; arguments: Record<string, unknown>; description?: string; batch_remaining?: Array<{ tool: string; arguments: string }>; answered?: boolean } & ProviderApprovalContext)
