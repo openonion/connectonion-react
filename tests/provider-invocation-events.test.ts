@@ -51,33 +51,33 @@ test('unknown providers keep the generic tool fallback', () => {
   expect(items).toEqual([{ id: 'x', type: 'tool_call', name: 'future_agent', args: undefined, status: 'running' }]);
 });
 
-test('passes a bounded model-written tool reason through without parsing arguments', () => {
+test('passes a bounded model-written action summary through without parsing arguments', () => {
   const items: ChatItem[] = [];
   apply(items, {
-    type: 'tool_call', tool_id: 'reasoned', name: 'search', status: 'in_progress',
+    type: 'tool_call', tool_id: 'summarised', name: 'search', status: 'in_progress',
     args: { query: 'duplicate orders' },
-    reason: 'Searching the order table to find duplicate rows',
+    summary: 'Search the order table for duplicate rows',
   });
   apply(items, {
-    type: 'tool_call_update', tool_id: 'reasoned', status: 'completed',
-    reason: 'Searching the order table to find duplicate rows', result: 'found 2',
+    type: 'tool_call_update', tool_id: 'summarised', status: 'completed',
+    summary: 'Search the order table for duplicate rows', result: 'found 2',
   });
 
   expect(items).toEqual([{
-    id: 'reasoned', type: 'tool_call', name: 'search', status: 'done',
+    id: 'summarised', type: 'tool_call', name: 'search', status: 'done',
     args: { query: 'duplicate orders' },
-    reason: 'Searching the order table to find duplicate rows', result: 'found 2',
+    summary: 'Search the order table for duplicate rows', result: 'found 2',
   }]);
 });
 
-test('omits an invalid tool reason so old and untrusted writers use the UI fallback', () => {
+test('omits an invalid tool summary so old and untrusted writers use the UI fallback', () => {
   const items: ChatItem[] = [];
   apply(items, {
-    type: 'tool_call', tool_id: 'invalid-reason', name: 'search', status: 'in_progress',
-    reason: 'x'.repeat(241),
+    type: 'tool_call', tool_id: 'invalid-summary', name: 'search', status: 'in_progress',
+    summary: 'x'.repeat(241),
   });
 
-  expect(items[0]).not.toHaveProperty('reason');
+  expect(items[0]).not.toHaveProperty('summary');
 });
 
 test('replayed duplicate child events update instead of duplicating', () => {
