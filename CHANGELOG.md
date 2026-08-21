@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — ConnectOnion 1.7 mode contract
+## 0.4.2-beta.0 — 2026-08-21
 
 ### Changed
 
