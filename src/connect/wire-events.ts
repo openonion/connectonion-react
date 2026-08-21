@@ -1,7 +1,7 @@
 /** Validation and normalization for ConnectOnion's OIP WebSocket events. */
 
-import type { ExecutionProfile, PermissionProfile, PlanEntry } from './types';
-import { normalizePermissionProfile } from './mode-compat';
+import type { Mode, PlanEntry } from './types';
+import { isMode, validatedModeState } from './mode';
 
 const PLAN_PRIORITIES = new Set<PlanEntry['priority']>(['high', 'medium', 'low']);
 const PLAN_STATUSES = new Set<PlanEntry['status']>([
@@ -11,11 +11,7 @@ const PLAN_STATUSES = new Set<PlanEntry['status']>([
 ]);
 
 export interface HostSessionMode {
-  id: PermissionProfile;
-  /** Exact authenticated value to send back to this Host. */
-  wireId: string;
-  /** Stable product vocabulary; UI never needs to parse wire aliases. */
-  profile: ExecutionProfile;
+  id: Mode;
   name: string;
   description?: string;
   recommended?: boolean;
@@ -24,11 +20,9 @@ export interface HostSessionMode {
 }
 
 export interface HostSessionModeState {
-  currentModeId: PermissionProfile;
+  currentModeId: Mode;
+  turnsLeft: number | null;
   availableModes: HostSessionMode[];
-  currentProfileId: ExecutionProfile;
-  schemaVersion: number | null;
-  policy: { id: string; version: number } | null;
 }
 
 export interface OIPPlanUpdate {
@@ -41,37 +35,25 @@ export type ApprovalRejectMode =
   | 'reject_hard'
   | 'reject_explain';
 
-/** Parse the exact permission state advertised in an OIP CONNECTED frame. */
+/** Parse exact authoritative mode state from an OIP CONNECTED frame. */
 export function hostSessionModeState(
   connected: Record<string, unknown>,
 ): HostSessionModeState | null {
   const state = record(connected.session_modes);
   if (!state || !Array.isArray(state.availableModes)) return null;
-  const schemaVersion = state.schemaVersion === 1 ? 1 : null;
-  const policyRecord = record(state.policy);
-  const policy = schemaVersion === 1
-    && nonEmpty(policyRecord?.id)
-    && Number.isInteger(policyRecord?.version)
-    && (policyRecord?.version as number) > 0
-    ? { id: policyRecord.id, version: policyRecord.version as number }
-    : null;
-  const versioned = schemaVersion === 1 && policy !== null;
-  const current = parseAdvertisedProfile(state.currentModeId, versioned);
+  const current = validatedModeState(state.currentModeId, state.turnsLeft ?? null);
   if (!current) return null;
 
   const availableModes: HostSessionMode[] = [];
-  const seen = new Set<PermissionProfile>();
+  const seen = new Set<Mode>();
   for (const candidate of state.availableModes) {
     const mode = record(candidate);
-    const parsed = parseAdvertisedProfile(mode?.id, versioned);
-    const id = parsed?.permission;
+    const id = isMode(mode?.id) ? mode.id : null;
     if (!id || seen.has(id) || !nonEmpty(mode?.name)) return null;
     if (mode.description != null && typeof mode.description !== 'string') return null;
     seen.add(id);
     availableModes.push({
       id,
-      wireId: mode.id as string,
-      profile: parsed.profile,
       name: mode.name,
       ...(typeof mode.description === 'string' ? { description: mode.description } : {}),
       ...(typeof mode.recommended === 'boolean' ? { recommended: mode.recommended } : {}),
@@ -79,42 +61,11 @@ export function hostSessionModeState(
       ...(typeof mode.bound === 'string' ? { bound: mode.bound } : {}),
     });
   }
-  return seen.has(current.permission) ? {
-    currentModeId: current.permission,
-    currentProfileId: current.profile,
+  return seen.has(current.mode) ? {
+    currentModeId: current.mode,
+    turnsLeft: current.turnsLeft,
     availableModes,
-    schemaVersion,
-    policy,
   } : null;
-}
-
-function parseAdvertisedProfile(
-  value: unknown,
-  versioned: boolean,
-): { permission: PermissionProfile; profile: ExecutionProfile } | null {
-  if (versioned) {
-    if (value === 'safe') return { permission: ':read-only', profile: 'safe' };
-    if (value === 'default') return { permission: ':workspace', profile: 'default' };
-    if (value === 'full_access') {
-      return { permission: ':danger-full-access', profile: 'full_access' };
-    }
-  }
-  const permission = parsePermissionProfile(value);
-  if (!permission) return null;
-  return {
-    permission,
-    profile: permission === ':read-only'
-      ? 'safe'
-      : permission === ':workspace' ? 'default' : 'full_access',
-  };
-}
-
-export function parseServerApprovalMode(value: unknown): PermissionProfile | null {
-  return parsePermissionProfile(value);
-}
-
-export function parsePermissionProfile(value: unknown): PermissionProfile | null {
-  return normalizePermissionProfile(value);
 }
 
 /** Decode one full-replacement OIP plan event for a session. */

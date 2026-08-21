@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.2-beta.0 — 2026-08-21
+
+### Changed
+
+- Expose only `read-only`, `auto`, and bounded `full-access` through `Mode`,
+  `mode`, `turnsLeft`, `availableModes`, and `setSessionMode()`.
+- Default fresh and unknown persisted state to Auto without translating old
+  permission aliases into current authority.
+- Remove collaboration/Plan mode, execution-profile, permission-profile, YOLO,
+  ULW, and checkpoint compatibility surfaces.
+- Validate the byte-identical Core fixture at
+  `tests/fixtures/oip/mode-contract-v1.json` before React consumes Host state.
+
 ## 0.4.2-alpha.15 — 2026-08-17
 
 Truthful current-state evidence for native Codex and Claude Code Work Rooms.

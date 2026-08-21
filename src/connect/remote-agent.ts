@@ -45,8 +45,8 @@
  */
 import * as address from '../address';
 import {
-  AgentInfo, AgentStatus, ApprovalMode, ChatItem, ChatItemType, CollaborationMode, ConnectionState, ExecutionProfile,
-  ConnectOptions, PermissionProfile, PlanEntry, ProviderApprovalPresentation, ProviderInputAcknowledgement, ProviderInterruptAcknowledgement, RemoteSessionStatus, ResolvedEndpoint, Response, SessionState, WebSocketCtor, WebSocketLike,
+  AgentInfo, AgentStatus, ChatItem, ChatItemType, ConnectionState,
+  ConnectOptions, Mode, PlanEntry, ProviderApprovalPresentation, ProviderInputAcknowledgement, ProviderInterruptAcknowledgement, RemoteSessionStatus, ResolvedEndpoint, Response, SessionState, WebSocketCtor, WebSocketLike,
 } from './types';
 import {
   AgentInfoSource, getWebSocketCtor, generateUUID, normalizeRelayUrl, resolveEndpoint, toAgentInfo,
@@ -54,21 +54,13 @@ import {
 import { ensureSigner, signPayload, type MessageSigner } from './auth';
 import { mapEventToChatItem, normalizeProviderInvocationSnapshot } from './chat-item-mapper';
 import { OIP_PROTOCOL, OipCompatibilityError, supportsOip } from './protocol';
-import {
-  isCanonicalPermissionProfile,
-  normalizeCollaborationMode,
-  normalizePermissionProfile,
-  normalizeChatItems,
-  normalizeFullAccessCheckpointFrame,
-  normalizeSessionState,
-} from './mode-compat';
+import { isMode, normalizeChatItems, normalizeSessionState, validatedModeState } from './mode';
 import {
   ApprovalRejectMode,
   HostSessionModeState,
   decodeLegacyPlanUpdate,
   hostSessionModeState,
   normalizePlanEntries,
-  parsePermissionProfile,
 } from './wire-events';
 
 interface PendingApproval {
@@ -76,11 +68,10 @@ interface PendingApproval {
   answered: boolean;
 }
 
-interface PendingPermissionProfileChange {
+interface PendingModeChange {
   requestId: string;
   sessionId: string;
-  profile: PermissionProfile;
-  wireId: string;
+  mode: Mode;
   resolve: () => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -109,7 +100,7 @@ interface ReconnectReadyWaiter {
   reject: (error: Error) => void;
 }
 
-const PERMISSION_PROFILE_CHANGE_TIMEOUT_MS = 30000;
+const MODE_CHANGE_TIMEOUT_MS = 30000;
 const PROVIDER_INTERRUPT_ACK_TIMEOUT_MS = 10000;
 const PROVIDER_INPUT_ACK_TIMEOUT_MS = 10000;
 const WEBSOCKET_OPEN = 1;
@@ -275,7 +266,7 @@ export class RemoteAgent {
   // Persistent WebSocket
   private _ws: WebSocketLike | null = null;
   private _authenticated = false;
-  private _permissionProfileState: HostSessionModeState | null = null;
+  private _modeState: HostSessionModeState | null = null;
   private _interruptSent = false;
   private _pendingProviderInterrupt: PendingProviderInterrupt | null = null;
   private _pendingProviderInput: PendingProviderInput | null = null;
@@ -310,7 +301,7 @@ export class RemoteAgent {
   private _reconnecting: Promise<Response> | null = null;
   private _reconnectReadyWaiters: ReconnectReadyWaiter[] = [];
   private _pendingApproval: PendingApproval | null = null;
-  private _pendingPermissionProfileChange: PendingPermissionProfileChange | null = null;
+  private _pendingModeChange: PendingModeChange | null = null;
   private _connectionEpoch = 0;
 
   _onMessage: (() => void) | null = null;
@@ -332,40 +323,15 @@ export class RemoteAgent {
   get connectionState(): ConnectionState { return this._connectionState; }
   get currentSession(): SessionState | null { return this._currentSession; }
   get ui(): ChatItem[] { return this._chatItems; }
-  get permissionProfile(): PermissionProfile {
-    return this._currentSession?.mode || ':read-only';
-  }
-  get executionProfile(): ExecutionProfile {
-    return this._permissionProfileState?.currentProfileId
-      ?? (this.permissionProfile === ':read-only'
-        ? 'safe'
-        : this.permissionProfile === ':workspace' ? 'default' : 'full_access');
-  }
-  get approvalPolicy(): HostSessionModeState['policy'] {
-    const policy = this._permissionProfileState?.policy;
-    return policy ? { ...policy } : null;
-  }
-  get collaborationMode(): CollaborationMode {
-    return this._currentSession?.collaboration_mode || 'default';
-  }
-  /** @deprecated Read collaborationMode and permissionProfile separately. */
-  get mode(): ApprovalMode {
-    return this.collaborationMode === 'plan' ? 'plan' : this.permissionProfile;
-  }
+  get mode(): Mode { return this._currentSession?.mode || 'auto'; }
+  get turnsLeft(): number | null { return this._currentSession?.turns_left ?? null; }
   get plan(): ReadonlyArray<PlanEntry> {
     return this._currentSession?.plan?.map((entry) => ({ ...entry })) ?? [];
   }
   get availableModes(): ReadonlyArray<HostSessionModeState['availableModes'][number]> {
-    return this.availablePermissionProfiles;
+    return this._modeState?.availableModes.map((mode) => ({ ...mode })) ?? [];
   }
-  get availablePermissionProfiles(): ReadonlyArray<HostSessionModeState['availableModes'][number]> {
-    return this._permissionProfileState?.availableModes.map((mode) => ({ ...mode })) ?? [];
-  }
-  get permissionProfileChangePending(): boolean {
-    return this._pendingPermissionProfileChange !== null;
-  }
-  /** @deprecated Use permissionProfileChangePending. */
-  get modeChangePending(): boolean { return this.permissionProfileChangePending; }
+  get modeChangePending(): boolean { return this._pendingModeChange !== null; }
   get error(): Error | null { return this._error || null; }
   get dashboardHtml(): string | null { return this._dashboardHtml; }
   get profile(): AgentInfo | null { return this._profile; }
@@ -609,8 +575,6 @@ export class RemoteAgent {
       this._onMessage?.();
     } else if (
       message.type === 'APPROVAL_RESPONSE' ||
-      message.type === 'PLAN_REVIEW_RESPONSE' ||
-      message.type === 'FULL_ACCESS_RESPONSE' ||
       message.type === 'ONBOARD_SUBMIT'
     ) {
       this._status = 'working';
@@ -825,33 +789,24 @@ export class RemoteAgent {
     this._onMessage?.();
   }
 
-  /** Change durable Host permissions only after one owned acknowledgement. */
-  async setPermissionProfile(profile: PermissionProfile): Promise<void> {
-    const advertised = this._permissionProfileState?.availableModes.find(
-      (item) => item.id === profile,
+  /** Change durable Host mode only after one owned acknowledgement. */
+  async setSessionMode(mode: Mode): Promise<void> {
+    const advertised = this._modeState?.availableModes.find(
+      (item) => item.id === mode,
     );
-    await this._setPermissionProfile(profile, advertised?.wireId ?? profile);
+    await this._setModeTransaction(mode, advertised?.id ?? mode);
   }
 
-  /** Change the normalized product profile using the Host-advertised wire value. */
-  async setExecutionProfile(profile: ExecutionProfile): Promise<void> {
-    const advertised = this._permissionProfileState?.availableModes.find(
-      (item) => item.profile === profile,
-    );
-    if (!advertised) throw new Error(`Execution profile is not available: ${profile}`);
-    await this._setPermissionProfile(advertised.id, advertised.wireId);
-  }
-
-  private async _setPermissionProfile(
-    profile: PermissionProfile,
-    wireId: string,
+  private async _setModeTransaction(
+    mode: Mode,
+    wireMode: string,
   ): Promise<void> {
     try {
-      if (!isCanonicalPermissionProfile(profile)) {
-        throw new Error(`Unsupported permission profile: ${String(profile)}`);
+      if (!isMode(mode)) {
+        throw new Error(`Unsupported mode: ${String(mode)}`);
       }
-      if (this._pendingPermissionProfileChange) {
-        throw new Error('A permission profile change is already pending');
+      if (this._pendingModeChange) {
+        throw new Error('A mode change is already pending');
       }
 
       this._error = null;
@@ -860,30 +815,29 @@ export class RemoteAgent {
       if (!sessionId || !this._ws || !this._authenticated) {
         throw new Error('No authenticated session');
       }
-      if (!this._permissionProfileState) {
-        throw new Error('Host does not support acknowledged permission profiles');
+      if (!this._modeState) {
+        throw new Error('Host does not support acknowledged modes');
       }
-      if (!this._permissionProfileState.availableModes.some((item) => item.id === profile)) {
-        throw new Error(`Permission profile is not available: ${profile}`);
+      if (!this._modeState.availableModes.some((item) => item.id === mode)) {
+        throw new Error(`Mode is not available: ${mode}`);
       }
-      if (this._currentSession?.mode === profile) return;
+      if (this._currentSession?.mode === mode) return;
 
       const requestId = generateUUID();
-      const request = { type: 'mode_change', mode: wireId };
+      const request = { type: 'mode_change', mode: wireMode };
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => {
-          const pending = this._pendingPermissionProfileChange;
+          const pending = this._pendingModeChange;
           if (pending?.requestId !== requestId) return;
-          this._rejectPermissionProfileChange(
+          this._rejectModeChange(
             pending,
-            new Error('Permission profile change timed out'),
+            new Error('Mode change timed out'),
           );
-        }, PERMISSION_PROFILE_CHANGE_TIMEOUT_MS);
-        this._pendingPermissionProfileChange = {
+        }, MODE_CHANGE_TIMEOUT_MS);
+        this._pendingModeChange = {
           requestId,
           sessionId,
-          profile,
-          wireId,
+          mode,
           resolve,
           reject,
           timer,
@@ -893,8 +847,8 @@ export class RemoteAgent {
           this._sendAuthenticated(request);
         } catch (cause) {
           const error = cause instanceof Error ? cause : new Error(String(cause));
-          const pending = this._pendingPermissionProfileChange;
-          if (pending) this._rejectPermissionProfileChange(pending, error);
+          const pending = this._pendingModeChange;
+          if (pending) this._rejectModeChange(pending, error);
         }
       });
     } catch (cause) {
@@ -907,62 +861,16 @@ export class RemoteAgent {
     }
   }
 
-  /** @deprecated Use setPermissionProfile. */
-  async setSessionMode(mode: PermissionProfile): Promise<void> {
-    await this.setPermissionProfile(mode);
-  }
-
-  /** Change local collaboration intent without changing Host authority. */
-  setCollaborationMode(mode: CollaborationMode): void {
-    const collaboration = normalizeCollaborationMode(mode);
-    if (!collaboration) {
-      throw new Error(`Unsupported collaboration mode: ${String(mode)}`);
-    }
+  private _applyServerMode(mode: Mode, turnsLeft: number | null): boolean {
+    const state = validatedModeState(mode, turnsLeft);
+    if (!state) return false;
     if (!this._currentSession) this._currentSession = {};
-    if (this._currentSession.collaboration_mode === collaboration) return;
-    this._currentSession.collaboration_mode = collaboration;
-    this._onMessage?.();
-  }
-
-  /** @deprecated Use setCollaborationMode or await setPermissionProfile. */
-  setMode(mode: ApprovalMode, _options?: { turns?: number }): void {
-    const collaboration = normalizeCollaborationMode(mode);
-    if (collaboration) {
-      this.setCollaborationMode(collaboration);
-      return;
-    }
-    const profile = normalizePermissionProfile(mode);
-    if (!profile) throw new Error(`Unsupported permission profile: ${String(mode)}`);
-    throw new Error(
-      `Permission profile ${profile} requires await setPermissionProfile()`,
-    );
-  }
-
-  private _applyServerMode(mode: PermissionProfile): boolean {
-    if (this._currentSession?.mode === mode) {
-      if (
-        mode !== ':danger-full-access'
-        && (
-          this._currentSession.full_access_turns !== undefined
-          || this._currentSession.full_access_turns_used !== undefined
-        )
-      ) {
-        delete this._currentSession.full_access_turns;
-        delete this._currentSession.full_access_turns_used;
-        return true;
-      }
-      return false;
-    }
-    if (!this._currentSession) {
-      this._currentSession = { mode };
-    } else {
-      this._currentSession.mode = mode;
-      if (mode !== ':danger-full-access') {
-        delete this._currentSession.full_access_turns;
-        delete this._currentSession.full_access_turns_used;
-      }
-    }
-    return true;
+    const changed = this._currentSession.mode !== state.mode
+      || (this._currentSession.turns_left ?? null) !== state.turnsLeft;
+    this._currentSession.mode = state.mode;
+    delete this._currentSession.turns_left;
+    if (state.turnsLeft != null) this._currentSession.turns_left = state.turnsLeft;
+    return changed;
   }
 
   private _applyPlanUpdate(sessionId: string, entries: PlanEntry[]): boolean {
@@ -1009,21 +917,20 @@ export class RemoteAgent {
     this._currentSession = snapshot;
   }
 
-  private _resolvePermissionProfileChange(
-    pending: PendingPermissionProfileChange,
+  private _resolveModeChange(
+    pending: PendingModeChange,
+    turnsLeft: number | null,
   ): void {
-    if (this._pendingPermissionProfileChange !== pending) return;
+    if (this._pendingModeChange !== pending) return;
     clearTimeout(pending.timer);
-    this._pendingPermissionProfileChange = null;
-    this._applyServerMode(pending.profile);
-    const advertised = this._permissionProfileState?.availableModes.find(
-      (item) => item.wireId === pending.wireId,
-    );
-    if (this._permissionProfileState && advertised) {
-      this._permissionProfileState = {
-        ...this._permissionProfileState,
+    this._pendingModeChange = null;
+    this._applyServerMode(pending.mode, turnsLeft);
+    const advertised = this._modeState?.availableModes.find((item) => item.id === pending.mode);
+    if (this._modeState && advertised) {
+      this._modeState = {
+        ...this._modeState,
         currentModeId: advertised.id,
-        currentProfileId: advertised.profile,
+        turnsLeft,
       };
     }
     this._error = null;
@@ -1031,13 +938,13 @@ export class RemoteAgent {
     this._onMessage?.();
   }
 
-  private _rejectPermissionProfileChange(
-    pending: PendingPermissionProfileChange,
+  private _rejectModeChange(
+    pending: PendingModeChange,
     error: Error,
   ): void {
-    if (this._pendingPermissionProfileChange !== pending) return;
+    if (this._pendingModeChange !== pending) return;
     clearTimeout(pending.timer);
-    this._pendingPermissionProfileChange = null;
+    this._pendingModeChange = null;
     this._error = error;
     pending.reject(error);
     this._onMessage?.();
@@ -1322,8 +1229,8 @@ export class RemoteAgent {
     // CONNECTED capability state is authoritative. A server_newer session can
     // still contain the pre-transaction mode, so reapply the advertised value
     // after accepting the durable conversation snapshot.
-    if (this._permissionProfileState) {
-      this._applyServerMode(this._permissionProfileState.currentModeId);
+    if (this._modeState) {
+      this._applyServerMode(this._modeState.currentModeId, this._modeState.turnsLeft);
     }
     if (connected.server_newer && connected.chat_items && Array.isArray(connected.chat_items)) {
       this._mergeServerChatItems(connected.chat_items as ChatItem[]);
@@ -1404,9 +1311,9 @@ export class RemoteAgent {
         this._rejectUnsupportedProtocol(data.protocol);
         return;
       }
-      this._permissionProfileState = hostSessionModeState(data);
-      if (this._permissionProfileState) {
-        this._applyServerMode(this._permissionProfileState.currentModeId);
+      this._modeState = hostSessionModeState(data);
+      if (this._modeState) {
+        this._applyServerMode(this._modeState.currentModeId, this._modeState.turnsLeft);
       }
       if (this._connectResolve) {
         // Authentication is observable state, so commit it before resolving the
@@ -1436,8 +1343,8 @@ export class RemoteAgent {
       }
       // Keep the Host's OIP SessionModeState above any stale mode carried by
       // the synchronized session snapshot.
-      if (this._permissionProfileState) {
-        this._applyServerMode(this._permissionProfileState.currentModeId);
+      if (this._modeState) {
+        this._applyServerMode(this._modeState.currentModeId, this._modeState.turnsLeft);
       }
       this._authenticated = true;
       this._connectionState = 'connected';
@@ -1494,46 +1401,35 @@ export class RemoteAgent {
     }
 
     if (data?.type === 'mode_changed') {
-      const advertised = this._permissionProfileState?.availableModes.find(
-        (item) => item.wireId === data.mode,
-      );
-      const profile = advertised?.id ?? parsePermissionProfile(data.mode);
-      const pending = this._pendingPermissionProfileChange;
+      const state = validatedModeState(data.mode, data.turns_left ?? null);
+      const advertised = state
+        ? this._modeState?.availableModes.find((item) => item.id === state.mode)
+        : undefined;
+      const pending = this._pendingModeChange;
       const responseSession = typeof data.session_id === 'string'
         ? data.session_id
         : this._currentSession?.session_id;
       if (
         pending
-        && data.mode === pending.wireId
+        && state?.mode === pending.mode
         && responseSession === pending.sessionId
       ) {
-        this._resolvePermissionProfileChange(pending);
+        if (!advertised) {
+          this._rejectModeChange(pending, new Error('Host acknowledged an invalid mode'));
+          return;
+        }
+        this._resolveModeChange(pending, state.turnsLeft);
         return;
       }
-      if (profile) {
-        if (this._permissionProfileState && advertised) {
-          this._permissionProfileState = {
-            ...this._permissionProfileState,
-            currentModeId: advertised.id,
-            currentProfileId: advertised.profile,
-          };
-        }
-        if (this._applyServerMode(profile)) this._onMessage?.();
+      if (state && (!this._modeState || advertised)) {
+        if (this._modeState) this._modeState = {
+          ...this._modeState,
+          currentModeId: state.mode,
+          turnsLeft: state.turnsLeft,
+        };
+        if (this._applyServerMode(state.mode, state.turnsLeft)) this._onMessage?.();
       }
       return;
-    }
-
-    const fullAccessCheckpoint = normalizeFullAccessCheckpointFrame(data);
-    if (fullAccessCheckpoint) {
-      this._status = 'waiting';
-      if (this._currentSession) {
-        this._currentSession.full_access_turns_used = fullAccessCheckpoint.turnsUsed;
-      }
-      this._addChatItem({
-        type: 'full_access_checkpoint',
-        turns_used: fullAccessCheckpoint.turnsUsed,
-        max_turns: fullAccessCheckpoint.maxTurns,
-      });
     }
 
     // Stream events → ChatItem mapping
@@ -1594,11 +1490,6 @@ export class RemoteAgent {
         ...providerContext,
         ...(providerApproval && { providerApproval }),
       });
-    }
-
-    if (data?.type === 'plan_review') {
-      this._status = 'waiting';
-      this._addChatItem({ type: 'plan_review', plan_content: data.plan_content as string });
     }
 
     // Onboard flow
@@ -1736,8 +1627,8 @@ export class RemoteAgent {
       }
 
       const err = new Error(`Agent error: ${message}`);
-      const pendingProfile = this._pendingPermissionProfileChange;
-      if (pendingProfile) this._rejectPermissionProfileChange(pendingProfile, err);
+      const pendingProfile = this._pendingModeChange;
+      if (pendingProfile) this._rejectModeChange(pendingProfile, err);
       const onboarding = this._status === 'waiting';
       this._error = err;
       // ERROR is terminal for the current attempt. Leaving the optimistic
@@ -1805,7 +1696,7 @@ export class RemoteAgent {
     this._ws = null;
     this._authenticated = false;
     this._connectionState = 'disconnected';
-    this._permissionProfileState = null;
+    this._modeState = null;
     this._stopPingMonitor();
     this._settleSessionStatusWaiters('not_found');
 
@@ -1822,10 +1713,10 @@ export class RemoteAgent {
       );
     }
 
-    if (this._pendingPermissionProfileChange) {
-      this._rejectPermissionProfileChange(
-        this._pendingPermissionProfileChange,
-        new Error('Connection closed before permission profile acknowledgement'),
+    if (this._pendingModeChange) {
+      this._rejectModeChange(
+        this._pendingModeChange,
+        new Error('Connection closed before mode acknowledgement'),
       );
     }
 
@@ -1927,10 +1818,10 @@ export class RemoteAgent {
     // socket's onclose is detached below, so nothing else would ever settle it, and
     // _ensureConnected would keep handing the stale promise to every later caller.
     this._settleConnect(new Error('Connection closed during authentication'));
-    if (this._pendingPermissionProfileChange) {
-      this._rejectPermissionProfileChange(
-        this._pendingPermissionProfileChange,
-        new Error('Connection closed before permission profile acknowledgement'),
+    if (this._pendingModeChange) {
+      this._rejectModeChange(
+        this._pendingModeChange,
+        new Error('Connection closed before mode acknowledgement'),
       );
     }
     if (this._pendingProviderInterrupt) {
@@ -1954,7 +1845,7 @@ export class RemoteAgent {
       this._ws = null;
     }
     this._authenticated = false;
-    this._permissionProfileState = null;
+    this._modeState = null;
     this._connectionState = 'disconnected';
     this._settleSessionStatusWaiters('not_found');
   }

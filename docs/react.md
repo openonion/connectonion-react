@@ -146,47 +146,34 @@ modes. An optional fourth argument carries explanatory feedback on a rejection.
 Calling the method twice for the same card sends only one response, including
 after a reconnect replay.
 
-### Collaboration modes and Host permission profiles
+### Host modes
 
-Codex collaboration intent is component/session workflow state. Permission is
-an authenticated Host capability. The hook exposes both axes separately:
+Mode is an authenticated Host capability with one public vocabulary:
 
 ```tsx
 const {
-  collaborationMode,             // 'default' | 'plan'
-  permissionProfile,              // ':read-only' | ':workspace' | ':danger-full-access'
-  availablePermissionProfiles,    // Host-advertised SessionMode[]
-  permissionProfileChangePending,
-  setCollaborationMode,
-  setPermissionProfile,
+  mode,               // 'read-only' | 'auto' | 'full-access'
+  turnsLeft,          // positive only in Full access
+  availableModes,     // Host-advertised SessionMode[]
+  modeChangePending,
+  setSessionMode,
 } = useAgentForHuman(address, sessionId)
 
-function planFirst() {
-  setCollaborationMode('plan')
-}
-
 async function allowWorkspaceEdits() {
-  await setPermissionProfile(':workspace')
+  await setSessionMode('auto')
 }
 ```
 
-The deprecated synchronous `setMode()` accepts only the local `default` and
-`plan` collaboration values. It rejects permission profiles because only an
-acknowledged `setPermissionProfile()` transaction may change Host authority.
+Do not render a mode absent from `availableModes`. Disable mode controls and
+new prompt submission while `modeChangePending` is true. The promise resolves
+only for a matching Host acknowledgement; a rejection, malformed response,
+timeout, or disconnect leaves `mode` unchanged. Reconnect before retrying an
+unknown timeout/disconnect outcome. Todo List progress remains separate data
+and never grants authority.
 
-Do not render a profile absent from `availablePermissionProfiles`. Disable
-permission controls and new prompt submission while
-`permissionProfileChangePending` is true. The promise resolves only for a
-matching Host acknowledgement; a rejection, malformed response, timeout, or disconnect
-leaves `permissionProfile` unchanged. Reconnect before retrying an unknown
-timeout/disconnect outcome.
+### Current Todo List
 
-Plan is deliberately excluded from `PermissionProfile` and must never be sent
-as Host `session/set_mode` authority.
-
-### Current plan
-
-The hook exposes the latest complete plan snapshot separately from the chat transcript:
+The hook exposes the latest complete Todo List snapshot separately from the chat transcript:
 
 ```tsx
 const { plan } = useAgentForHuman(address, sessionId)
@@ -195,8 +182,8 @@ const { plan } = useAgentForHuman(address, sessionId)
 Each entry has `content`, `priority` (`high | medium | low`), and `status`
 (`pending | in_progress | completed`). Every OIP plan update replaces the whole list;
 an empty list clears it. The snapshot persists with its session and is restored on
-reconnect. It is read-only progress state, not an approval surface: keep interactive
-`plan_review` handling separate and never use `plan` to authorize implementation.
+reconnect. It is read-only progress state, not an approval surface; never use
+`plan` to authorize implementation.
 
 ### Tool Call Status
 
