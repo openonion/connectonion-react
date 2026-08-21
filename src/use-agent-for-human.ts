@@ -3,7 +3,7 @@
  *   Dependencies: imports from [react, src/react/agent-cache (acquireAgent/dropAgent), src/react/store] | imported by [src/react/index.ts]
  *   Data flow: hook gets one RemoteAgent per address:sessionId from the live-connection cache → agent.onMessage flushes ui/status/session/error into the zustand store → React re-renders from the store
  *   State/Effects: reuses the cached live RemoteAgent across session switches (agent-cache, bounded LRU) | persists session via the store | input() is fire-and-forget (errors surface via agent.error in the flush)
- *   Integration: exposes useAgentForHuman(address, options) returning {ui, status, input, setCollaborationMode, setPermissionProfile, reconnect, send, reset, ...}
+ *   Integration: exposes useAgentForHuman(address, options) returning {ui, status, mode, turnsLeft, availableModes, setSessionMode, reconnect, send, reset, ...}
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -12,15 +12,11 @@ import {
   PlanEntry,
   AgentStatus,
   ConnectionState,
-  SessionState,
-  ApprovalMode,
-  CollaborationMode,
+  Mode,
   OutgoingMessage,
   ApprovalRejectMode,
   HostSessionModeState,
   RemoteSessionStatus,
-  PermissionProfile,
-  ExecutionProfile,
 } from './connect';
 import { acquireAgent, dropAgent } from './agent-cache';
 import { getStore, type Message } from './store';
@@ -28,7 +24,7 @@ import { getStore, type Message } from './store';
 /**
  * Return value of `useAgentForHuman`. Exposes all reactive state and every method
  * needed to drive a full chat UI — from sending a first prompt to handling
- * Full access checkpoints and approval gates.
+ * approval gates and bounded modes.
  *
  * This hook is designed for human users interacting with agents through a UI.
  * For agent-to-agent communication, use `connect()` directly.
@@ -90,41 +86,17 @@ export interface UseAgentForHumanReturn {
   checkSessionStatus: (sessionId: string) => Promise<RemoteSessionStatus>;
 
 
-  /** @deprecated Read collaborationMode and permissionProfile separately. */
-  mode: ApprovalMode;
+  /** Current authoritative Host mode. Defaults to Auto. */
+  mode: Mode;
 
-  /** Current Codex collaboration mode. */
-  collaborationMode: CollaborationMode;
+  /** Remaining completed user-driven turns in Full access. */
+  turnsLeft: number | null;
 
-  /** Current Host-enforced Codex permission profile. */
-  permissionProfile: PermissionProfile;
-
-  /** Product-facing Default / Safe / Full access profile from authenticated Host state. */
-  executionProfile: ExecutionProfile;
-
-  /** @deprecated Use availablePermissionProfiles. */
+  /** Exact modes advertised by the Host. */
   availableModes: ReadonlyArray<HostSessionModeState['availableModes'][number]>;
 
-  /** Server-authorized permission profiles. */
-  availablePermissionProfiles: ReadonlyArray<HostSessionModeState['availableModes'][number]>;
-
-  /** Host-advertised product profiles with exact wire mappings and policy metadata. */
-  availableExecutionProfiles: ReadonlyArray<HostSessionModeState['availableModes'][number]>;
-
-  /** Versioned policy advertised by the authenticated Host, or null for a legacy Host. */
-  approvalPolicy: HostSessionModeState['policy'];
-
-  /** @deprecated Use permissionProfileChangePending. */
+  /** True while an acknowledged mode transaction is outstanding. */
   modeChangePending: boolean;
-
-  /** True while an acknowledged permission-profile transaction is outstanding. */
-  permissionProfileChangePending: boolean;
-
-  /** Maximum turns before Full access pauses. null outside Full access. */
-  fullAccessTurns: number | null;
-
-  /** Turns consumed in the current Full access window. null outside Full access. */
-  fullAccessTurnsUsed: number | null;
 
   /**
    * Fire-and-forget: sends a user prompt to the agent. Updates flow back through
@@ -150,8 +122,7 @@ export interface UseAgentForHumanReturn {
 
   /**
    * Send a typed message to the agent over the WebSocket.
-   * Use this for all response messages: ASK_USER_RESPONSE, APPROVAL_RESPONSE,
-   * PLAN_REVIEW_RESPONSE, FULL_ACCESS_RESPONSE, etc.
+   * Use this for response messages such as ASK_USER_RESPONSE and APPROVAL_RESPONSE.
    */
   sendMessage: (message: OutgoingMessage) => void;
 
@@ -174,24 +145,8 @@ export interface UseAgentForHumanReturn {
   /** Sign an onboard payload asynchronously. Pass the resolved result to sendMessage(). */
   signOnboard: (options: { inviteCode?: string; payment?: number }) => Promise<OutgoingMessage>;
 
-  /**
-   * @deprecated Use the two explicit setters. This compatibility method only
-   * accepts `default` / `plan`; permission values throw instead of fabricating
-   * Host authority.
-   */
-  setMode: (mode: ApprovalMode, options?: { turns?: number }) => void;
-
-  /** Change local collaboration intent without changing Host permission authority. */
-  setCollaborationMode: (mode: CollaborationMode) => void;
-
-  /** Persist one permission profile and resolve only after Host confirmation. */
-  setPermissionProfile: (profile: PermissionProfile) => Promise<void>;
-
-  /** Change the product execution profile through the Host-acknowledged transaction. */
-  setExecutionProfile: (profile: ExecutionProfile) => Promise<void>;
-
-  /** @deprecated Use setPermissionProfile. */
-  setSessionMode: (mode: PermissionProfile) => Promise<void>;
+  /** Persist one exact mode and resolve only after Host confirmation. */
+  setSessionMode: (mode: Mode) => Promise<void>;
 
   /** Reconnect to existing session to receive pending output */
   reconnect: () => void;
@@ -204,7 +159,7 @@ export interface UseAgentForHumanReturn {
  * React hook for a human user to interact with a remote AI agent.
  *
  * This is the primary hook for building chat UIs where a human drives the
- * conversation. It handles approval gates, Full access checkpoints, onboarding flows,
+ * conversation. It handles approval gates, bounded modes, onboarding flows,
  * and session persistence — all concerns specific to human interaction.
  * For agent-to-agent communication, use `connect()` directly instead.
  *
@@ -278,11 +233,11 @@ export function useAgentForHuman(
   // already holds it and a cold one fills it in on the next flush.
   const [profile, setProfile] = useState<AgentInfo | null>(agent.profile);
 
-  const [availablePermissionProfiles, setAvailablePermissionProfiles] = useState(
-    () => [...agent.availablePermissionProfiles],
+  const [availableModes, setAvailableModes] = useState(
+    () => [...agent.availableModes],
   );
-  const [permissionProfileChangePending, setPermissionProfileChangePending] = useState(
-    agent.permissionProfileChangePending,
+  const [modeChangePending, setModeChangePending] = useState(
+    agent.modeChangePending,
   );
 
   // Detach the public observation from persisted/server-owned session data while
@@ -302,8 +257,8 @@ export function useAgentForHuman(
       setConnectionState(agent.connectionState);
       setDashboardHtml(agent.dashboardHtml);
       setProfile(agent.profile);
-      setAvailablePermissionProfiles([...agent.availablePermissionProfiles]);
-      setPermissionProfileChangePending(agent.permissionProfileChangePending);
+      setAvailableModes([...agent.availableModes]);
+      setModeChangePending(agent.modeChangePending);
       setError(agent.error);
       if (agent.currentSession) {
         setSession(agent.currentSession);
@@ -327,9 +282,9 @@ export function useAgentForHuman(
     // and remount effects. Recover cached Host authority here so consumers do
     // not invent a permission fallback or hide profiles the Host advertised.
     setProfile(agent.profile);
-    setAvailablePermissionProfiles([...agent.availablePermissionProfiles]);
-    setPermissionProfileChangePending(agent.permissionProfileChangePending);
-    if (agent.ui.length > 0 || agent.availablePermissionProfiles.length > 0) flush();
+    setAvailableModes([...agent.availableModes]);
+    setModeChangePending(agent.modeChangePending);
+    if (agent.ui.length > 0 || agent.availableModes.length > 0) flush();
 
     return () => {
       // A route transition can mount the next hook before this owner unmounts.
@@ -471,37 +426,11 @@ export function useAgentForHuman(
   const interruptProvider = (invocationId: string) => agent.interruptProvider(invocationId);
   const sendProviderInput = (invocationId: string, text: string) => agent.sendProviderInput(invocationId, text);
 
-  const setMode = (newMode: ApprovalMode, options?: { turns?: number }) => {
-    const isCollaborationMode = newMode === 'default' || newMode === 'plan';
-    agent.setMode(newMode, options);
-    if (!isCollaborationMode) return;
-    const updates: Partial<SessionState> = { collaboration_mode: newMode };
-    setSession(session
-      ? { ...session, ...updates }
-      : { session_id: sessionId, ...updates }
-    );
-  };
-
-  const setCollaborationMode = (newMode: CollaborationMode) => {
-    agent.setCollaborationMode(newMode);
-    setSession(session
-      ? { ...session, collaboration_mode: newMode }
-      : { session_id: sessionId, collaboration_mode: newMode }
-    );
-  };
-
-  const setPermissionProfile = async (newMode: PermissionProfile) => {
+  const setSessionMode = async (newMode: Mode) => {
     setError(null);
-    await agent.setPermissionProfile(newMode);
+    await agent.setSessionMode(newMode);
     setError(null);
   };
-  const setExecutionProfile = async (profile: ExecutionProfile) => {
-    setError(null);
-    await agent.setExecutionProfile(profile);
-    setError(null);
-  };
-
-  const setSessionMode = setPermissionProfile;
 
   return {
     status,
@@ -514,20 +443,10 @@ export function useAgentForHuman(
     dashboardHtml,
     profile,
     checkSessionStatus: (sid: string) => agent.checkSessionStatus(sid),
-    mode: session?.collaboration_mode === 'plan'
-      ? 'plan'
-      : session?.mode || ':read-only',
-    collaborationMode: session?.collaboration_mode || 'default',
-    permissionProfile: session?.mode || ':read-only',
-    executionProfile: agent.executionProfile,
-    availableModes: availablePermissionProfiles,
-    availablePermissionProfiles,
-    availableExecutionProfiles: availablePermissionProfiles,
-    approvalPolicy: agent.approvalPolicy,
-    modeChangePending: permissionProfileChangePending,
-    permissionProfileChangePending,
-    fullAccessTurns: session?.full_access_turns ?? null,
-    fullAccessTurnsUsed: session?.full_access_turns_used ?? null,
+    mode: session?.mode || 'auto',
+    turnsLeft: session?.turns_left ?? null,
+    availableModes,
+    modeChangePending,
     input,
     retry,
     connect,
@@ -537,10 +456,6 @@ export function useAgentForHuman(
     interruptProvider,
     sendProviderInput,
     signOnboard: (options: { inviteCode?: string; payment?: number }) => agent.signOnboard(options),
-    setMode,
-    setCollaborationMode,
-    setPermissionProfile,
-    setExecutionProfile,
     setSessionMode,
     reconnect,
     reset,

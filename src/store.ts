@@ -11,7 +11,7 @@
 import { create, StoreApi, UseBoundStore } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { ChatItem, AgentStatus, SessionState } from './connect';
-import { normalizeChatItems, normalizeSessionState } from './connect/mode-compat';
+import { normalizeChatItems, normalizeSessionState } from './connect/mode';
 
 // =============================================================================
 // Types

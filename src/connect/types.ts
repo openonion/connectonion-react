@@ -3,7 +3,7 @@
  *   Dependencies: imports from [src/address (type-only)] | imported by [all connect/ files, src/react/]
  *   Data flow: defines interfaces used by RemoteAgent for WebSocket message parsing → ChatItem union rendered by UI consumers → SessionState synced between client/server
  *   State/Effects: pure type definitions, no runtime logic or side effects
- *   Integration: exports Response, ChatItem (14-variant union), ChatItemType, AskUserField (structured ask_user forms, e.g. login credentials), WebSocketLike, WebSocketCtor, ResolvedEndpoint, AgentInfo, ConnectOptions, SessionState, ApprovalMode, AgentStatus, ConnectionState
+ *   Integration: exports Response, ChatItem, ChatItemType, AskUserField, WebSocketLike, WebSocketCtor, ResolvedEndpoint, AgentInfo, ConnectOptions, SessionState, Mode, AgentStatus, ConnectionState
  */
 import type * as address from '../address';
 import type { MessageSigner } from '../browser-identity';
@@ -124,7 +124,7 @@ export interface ProviderApprovalPresentation {
   files?: string[];
 }
 
-export type ChatItemType = 'user' | 'agent' | 'thinking' | 'tool_call' | 'provider_invocation' | 'ask_user' | 'approval_needed' | 'onboard_required' | 'onboard_success' | 'intent' | 'eval' | 'compact' | 'tool_blocked' | 'full_access_checkpoint' | 'plan_review' | 'files_received';
+export type ChatItemType = 'user' | 'agent' | 'thinking' | 'tool_call' | 'provider_invocation' | 'ask_user' | 'approval_needed' | 'onboard_required' | 'onboard_success' | 'intent' | 'eval' | 'compact' | 'tool_blocked' | 'files_received';
 
 export interface AskUserField {
   name: string;
@@ -149,8 +149,6 @@ export type ChatItem =
   | { id: string; type: 'eval'; status: 'evaluating' | 'done'; passed?: boolean; summary?: string; expected?: string; eval_path?: string }
   | { id: string; type: 'compact'; status: 'compacting' | 'done' | 'error'; context_before?: number; context_after?: number; context_percent?: number; message?: string; error?: string }
   | { id: string; type: 'tool_blocked'; tool: string; reason: string; message: string; command?: string }
-  | { id: string; type: 'full_access_checkpoint'; turns_used: number; max_turns: number }
-  | { id: string; type: 'plan_review'; plan_content: string }
   | { id: string; type: 'files_received'; files: Array<{ name: string; path: string }> };
 
 export type WebSocketLike = {
@@ -255,33 +253,14 @@ export interface SessionState {
   turn?: number;
   /** Latest full OIP plan snapshot. An empty array explicitly clears the plan. */
   plan?: ReadonlyArray<PlanEntry>;
-  /** Host-enforced permission profile. Kept in `mode` for wire compatibility. */
-  mode?: PermissionProfile;
-  /** Local product workflow; never treated as Host authority. */
-  collaboration_mode?: CollaborationMode;
-  /** Full access: max turns before pausing at a checkpoint. */
-  full_access_turns?: number;
-  /** Full access: turns used in the current checkpoint window. */
-  full_access_turns_used?: number;
+  /** Host-enforced public mode. Unknown stored values normalize to Auto. */
+  mode?: Mode;
+  /** Remaining completed user-driven turns for bounded Full access. */
+  turns_left?: number;
 }
 
-/** Exact built-in Codex permission profile identifiers. */
-export type PermissionProfile =
-  | ':read-only'
-  | ':workspace'
-  | ':danger-full-access';
-
-/** Product-facing execution profile, normalized from authenticated Host state. */
-export type ExecutionProfile = 'safe' | 'default' | 'full_access';
-
-/** Codex collaboration modes are independent of permission profiles. */
-export type CollaborationMode = 'default' | 'plan';
-
-/** @deprecated Use PermissionProfile. */
-export type ServerApprovalMode = PermissionProfile;
-
-/** @deprecated Use CollaborationMode and PermissionProfile separately. */
-export type ApprovalMode = CollaborationMode | PermissionProfile;
+/** The complete ConnectOnion 1.7 public mode vocabulary. */
+export type Mode = 'read-only' | 'auto' | 'full-access';
 
 export type AgentStatus = 'idle' | 'working' | 'waiting';
 

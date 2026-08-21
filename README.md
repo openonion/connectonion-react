@@ -4,7 +4,7 @@ React hooks and browser primitives for ConnectOnion agents over OIP.
 
 The package owns the browser connection end to end: OIP endpoint discovery,
 the authenticated `/ws` session, browser identity, reconnect and onboarding,
-permission-profile acknowledgements, event normalization, and the Zustand-backed
+mode acknowledgements, event normalization, and the Zustand-backed
 React session store. It has no dependency on the retired `connectonion-ts`
 package and uses OIP exclusively.
 
@@ -41,9 +41,9 @@ export function AgentChat({ address }: { address: string }) {
 ```
 
 `useAgentForHuman` exposes the conversation `ui`, connection and processing
-state, the current OIP plan, authenticated agent profile and dashboard, plus
+state, the current Todo List, authenticated agent profile and dashboard, plus
 actions for prompts, onboarding, approvals, interruption, reconnect, and
-permission-profile changes.
+mode changes.
 
 Onboarding pauses the original CONNECT attempt. Submit the signed invite or
 payment assertion through `signOnboard` and `sendMessage`; after verification,
@@ -73,24 +73,19 @@ const agent = new RemoteAgent('0x...', {
 When a host advertises its protocol in `CONNECTED`, the client accepts OIP 0.1
 and reports a clear error for an unsupported protocol or version.
 
-## Permission and collaboration state
+## Modes
 
-Permission profiles are Host authority:
+The Host exposes exactly three public modes:
 
-- `:read-only`
-- `:workspace`
-- `:danger-full-access`
+- `read-only`
+- `auto`
+- `full-access`
 
-Call and await `setPermissionProfile()`. The client sends an OIP `mode_change`
-and changes local authority only after the matching `mode_changed` response.
-Collaboration mode (`default` or `plan`) is a separate product preference.
-
-For product UI, use `executionProfile`, `availableExecutionProfiles`,
-`approvalPolicy`, and `setExecutionProfile()`. They expose the normalized
-`safe` / `default` / `full_access` vocabulary plus the exact authenticated
-Host mapping. A versioned 1.6.11 Host maps Default to Auto Approve; an old or
-unversioned persisted value named `default` restores conservatively as Safe.
-Browser storage and URL state are never used as permission authority.
+Read `mode`, `turnsLeft`, and `availableModes`, then await
+`setSessionMode()`. The client sends an OIP `mode_change` and updates local
+authority only after the matching `mode_changed` acknowledgement. Every fresh
+or unknown stored state becomes Auto; old spellings are not translated into
+authority. Full access always carries a positive bounded `turnsLeft` value.
 
 Codex and Claude Code child activity arrives as ordinary OIP
 `provider_invocation`, `tool_call`, and `tool_result` events. The package nests

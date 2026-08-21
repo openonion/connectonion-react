@@ -316,7 +316,7 @@ describe('useAgentForHuman hook', () => {
             return;
           }
           setTimeout(() => this.onmessage?.({
-            data: JSON.stringify({ type: 'mode_changed', mode: ':workspace' }),
+            data: JSON.stringify({ type: 'mode_changed', mode: 'auto' }),
           }), 1);
           setTimeout(() => this.onmessage?.({
             data: JSON.stringify({
@@ -338,7 +338,7 @@ describe('useAgentForHuman hook', () => {
         await flush();
       });
 
-      expect(result.current.permissionProfile).toBe(':workspace');
+      expect(result.current.mode).toBe('auto');
     });
 
     it('exposes advertised modes and waits for the acknowledged mode response', async () => {
@@ -360,14 +360,14 @@ describe('useAgentForHuman hook', () => {
               server_newer: true,
               session: {
                 session_id: 'mode-write-session',
-                mode: ':workspace',
+                mode: 'auto',
                 messages: [],
               },
               session_modes: {
-                currentModeId: ':read-only',
+                currentModeId: 'read-only',
                 availableModes: [
-                  { id: ':read-only', name: 'Safe' },
-                  { id: ':workspace', name: 'Auto' },
+                  { id: 'read-only', name: 'Read only' },
+                  { id: 'auto', name: 'Auto' },
                 ],
               },
             };
@@ -381,7 +381,7 @@ describe('useAgentForHuman hook', () => {
           this.onmessage?.({ data: JSON.stringify({
             type: 'mode_changed',
             session_id: 'mode-write-session',
-            mode: ':workspace',
+            mode: 'auto',
           }) });
         }
       }
@@ -395,32 +395,32 @@ describe('useAgentForHuman hook', () => {
         result.current.connect();
         await flush();
       });
-      expect(result.current.availablePermissionProfiles.map((mode) => mode.id)).toEqual([
-        ':read-only', ':workspace',
+      expect(result.current.availableModes.map((mode) => mode.id)).toEqual([
+        'read-only', 'auto',
       ]);
-      expect(result.current.permissionProfile).toBe(':read-only');
+      expect(result.current.mode).toBe('read-only');
 
       let change!: Promise<void>;
       await act(async () => {
-        change = result.current.setPermissionProfile(':workspace');
+        change = result.current.setSessionMode('auto');
         await Promise.resolve();
       });
-      expect(result.current.permissionProfile).toBe(':read-only');
-      expect(result.current.permissionProfileChangePending).toBe(true);
+      expect(result.current.mode).toBe('read-only');
+      expect(result.current.modeChangePending).toBe(true);
       expect(sentFrames.find((frame) => frame.type === 'mode_change')).toMatchObject({
-        mode: ':workspace',
+        mode: 'auto',
       });
 
       await act(async () => {
         socket!.acknowledge();
         await change;
       });
-      expect(result.current.permissionProfile).toBe(':workspace');
-      expect(result.current.permissionProfileChangePending).toBe(false);
+      expect(result.current.mode).toBe('auto');
+      expect(result.current.modeChangePending).toBe(false);
       expect(result.current.error).toBeNull();
     });
 
-    it('resynchronizes permission capability state when the cached agent changes', async () => {
+    it('resynchronizes mode capability state when the cached agent changes', async () => {
       class AdvertisedModeWS extends MockWebSocket {
         override send(data: unknown): void {
           const msg = JSON.parse(String(data));
@@ -434,10 +434,10 @@ describe('useAgentForHuman hook', () => {
             session_id: msg.session_id,
             status: 'new',
             session_modes: {
-              currentModeId: ':workspace',
+              currentModeId: 'auto',
               availableModes: [
-                { id: ':read-only', name: 'Read only' },
-                { id: ':workspace', name: 'Auto' },
+                { id: 'read-only', name: 'Read only' },
+                { id: 'auto', name: 'Auto' },
               ],
             },
           }) }), 0);
@@ -454,16 +454,16 @@ describe('useAgentForHuman hook', () => {
         result.current.connect();
         await flush();
       });
-      expect(result.current.availablePermissionProfiles).toHaveLength(2);
+      expect(result.current.availableModes).toHaveLength(2);
 
       await act(async () => {
         rerender({ sessionId: 'cold-session' });
         await Promise.resolve();
       });
-      expect(result.current.availablePermissionProfiles).toEqual([]);
+      expect(result.current.availableModes).toEqual([]);
     });
 
-    it('recovers cached Host permission authority when the hook remounts', async () => {
+    it('recovers cached Host mode authority when the hook remounts', async () => {
       class AdvertisedModeWS extends MockWebSocket {
         override send(data: unknown): void {
           const msg = JSON.parse(String(data));
@@ -473,10 +473,10 @@ describe('useAgentForHuman hook', () => {
             session_id: msg.session_id,
             status: 'new',
             session_modes: {
-              currentModeId: ':workspace',
+              currentModeId: 'auto',
               availableModes: [
-                { id: ':read-only', name: 'Read only' },
-                { id: ':workspace', name: 'Auto' },
+                { id: 'read-only', name: 'Read only' },
+                { id: 'auto', name: 'Auto' },
               ],
             },
           }) }), 0);
@@ -492,19 +492,19 @@ describe('useAgentForHuman hook', () => {
         first.result.current.connect();
         await flush();
       });
-      expect(first.result.current.availablePermissionProfiles.map((mode) => mode.id)).toEqual([
-        ':read-only', ':workspace',
+      expect(first.result.current.availableModes.map((mode) => mode.id)).toEqual([
+        'read-only', 'auto',
       ]);
-      expect(first.result.current.permissionProfile).toBe(':workspace');
+      expect(first.result.current.mode).toBe('auto');
       first.unmount();
 
       const second = renderHook(() =>
         useAgentForHuman(addr, 'mode-remount-session')
       );
-      expect(second.result.current.availablePermissionProfiles.map((mode) => mode.id)).toEqual([
-        ':read-only', ':workspace',
+      expect(second.result.current.availableModes.map((mode) => mode.id)).toEqual([
+        'read-only', 'auto',
       ]);
-      expect(second.result.current.permissionProfile).toBe(':workspace');
+      expect(second.result.current.mode).toBe('auto');
       second.unmount();
     });
   });
@@ -716,7 +716,7 @@ describe('useAgentForHuman hook', () => {
   });
 
   describe('session persistence', () => {
-    it('hydrates a v1 approval session through the v2 vocabulary migration', async () => {
+    it('discards legacy stored authority to Auto', async () => {
       const addr = uniqueAddr();
       const sessionId = 'legacy-mode-session';
       const key = `co:agent:${addr}:session:${sessionId}`;
@@ -746,14 +746,11 @@ describe('useAgentForHuman hook', () => {
         persist: { rehydrate: () => Promise<void> };
       }).persist.rehydrate();
 
-      expect(store.getState().session).toMatchObject({
-        mode: ':danger-full-access',
-        full_access_turns: 20,
-        full_access_turns_used: 4,
+      expect(store.getState().session).toEqual({
+        session_id: sessionId,
+        mode: 'auto',
       });
-      expect(store.getState().ui).toEqual([expect.objectContaining({
-        type: 'full_access_checkpoint',
-      })]);
+      expect(store.getState().ui).toEqual([]);
     });
 
     it('uses provided sessionId', () => {
