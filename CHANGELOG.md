@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Preserve Core's normalized managed-usage fields, including uncached input,
+  cache reads, cache writes and TTL classes, cache reporting status, provider
+  identity, and the server pricing metadata used for the final charge.
+
 ## 0.4.2-beta.0 — 2026-08-21
 
 ### Changed

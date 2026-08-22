@@ -10,7 +10,7 @@
  *     renders its output in `components/chat/messages/coding-agent-workroom.tsx` under
  *     the reader contract in `docs/WORKROOM.md`. Change all three layers together.
  */
-import { ChatItem, ChatItemType, ProviderArtifact } from './types';
+import { ChatItem, ChatItemType, LLMUsage, ProviderArtifact } from './types';
 import { decodeIncomingEvent } from './wire-events';
 
 const SUCCESSFUL_TOOL_RESULTS = new Set(['success', 'done', 'completed']);
@@ -565,11 +565,7 @@ export function mapEventToChatItem(
         if (typeof event.duration_ms === 'number') existingThinking.duration_ms = event.duration_ms;
         if (event.model) existingThinking.model = event.model as string;
         if (event.usage) {
-          existingThinking.usage = event.usage as {
-            input_tokens?: number; output_tokens?: number;
-            prompt_tokens?: number; completion_tokens?: number;
-            total_tokens?: number; cost?: number;
-          };
+          existingThinking.usage = event.usage as LLMUsage;
         }
         if (typeof event.context_percent === 'number') existingThinking.context_percent = event.context_percent;
       }

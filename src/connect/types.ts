@@ -135,10 +135,37 @@ export interface AskUserField {
   autocomplete?: string;
 }
 
+/** Provider-neutral usage emitted by Core for one managed LLM call. */
+export interface LLMUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  cached_tokens?: number;
+  cache_write_tokens?: number;
+  cost?: number;
+  cost_usd?: number;
+  input_tokens_total?: number;
+  input_tokens_uncached?: number;
+  cache_read_input_tokens?: number;
+  cache_write_input_tokens?: number;
+  cache_write_5m_input_tokens?: number;
+  cache_write_1h_input_tokens?: number;
+  cache_metadata_status?: 'reported' | 'unavailable' | 'unsupported';
+  provider?: string;
+  requested_model?: string;
+  provider_model?: string;
+  provider_reported_cost_usd?: number;
+  pricing_version?: string;
+  pricing_tier?: string;
+  cost_details?: Record<string, unknown>;
+}
+
 export type ChatItem =
   | { id: string; type: 'user'; content: string; images?: string[]; files?: FileAttachment[] }
   | { id: string; type: 'agent'; content: string; images?: string[] }
-  | { id: string; type: 'thinking'; status: 'running' | 'done' | 'error'; model?: string; duration_ms?: number; content?: string; kind?: string; context_percent?: number; usage?: { input_tokens?: number; output_tokens?: number; prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; cost?: number } }
+  | { id: string; type: 'thinking'; status: 'running' | 'done' | 'error'; model?: string; duration_ms?: number; content?: string; kind?: string; context_percent?: number; usage?: LLMUsage }
   | { id: string; type: 'tool_call'; name: string; args?: Record<string, unknown>; summary?: string; status: 'running' | 'done' | 'error'; result?: string; timing_ms?: number }
   | ProviderInvocationItem
   | { id: string; type: 'ask_user'; text: string; options: string[]; multi_select: boolean; input_type?: string; fields?: AskUserField[]; answered?: boolean; answer?: string }
