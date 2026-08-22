@@ -266,6 +266,44 @@ test('resolves a direct Codex Work Room message only after its matching Host ack
   expect(agent._pendingProviderInput).toBeNull();
 });
 
+test('sends a direct Claude Code Work Room message through the same provider envelope', async () => {
+  const agent = new RemoteAgent('0x' + 'a'.repeat(64), {}) as any;
+  const socket = new FakeSocket();
+  agent._ws = socket;
+  agent._authenticated = true;
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'provider_invocation', invocationId: 'claude_code:outer-call',
+    parentToolCallId: 'outer-call', provider: 'claude_code', providerDisplayName: 'Claude Code',
+    currentSummary: 'Working in the selected workspace', status: 'completed', stateRevision: 4,
+  }) });
+
+  const sent = agent.sendProviderInput(
+    'claude_code:outer-call',
+    'Continue this Claude Code session.',
+  );
+  const request = JSON.parse(socket.sent[0]);
+  expect(request).toEqual(expect.objectContaining({
+    type: 'PROVIDER_INPUT',
+    invocationId: 'claude_code:outer-call',
+    requestId: expect.any(String),
+    stateRevision: 4,
+    text: 'Continue this Claude Code session.',
+  }));
+
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'PROVIDER_INPUT_ACK',
+    requestId: request.requestId,
+    invocationId: 'claude_code:outer-call',
+    accepted: true,
+    stateRevision: 4,
+  }) });
+
+  await expect(sent).resolves.toEqual({
+    invocationId: 'claude_code:outer-call',
+    stateRevision: 4,
+  });
+});
+
 test('fails closed when a direct Codex acknowledgement has a different revision', async () => {
   const agent = new RemoteAgent('0x' + 'a'.repeat(64), {}) as any;
   const socket = new FakeSocket();
@@ -288,7 +326,7 @@ test('fails closed when a direct Codex acknowledgement has a different revision'
   }) });
 
   await expect(sent).rejects.toThrow(
-    'The Host did not prove the message applies to the current Codex state.',
+    'The Host did not prove the message applies to the current provider state.',
   );
   expect(agent._pendingProviderInput).toBeNull();
 });

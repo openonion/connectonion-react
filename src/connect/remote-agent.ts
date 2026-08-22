@@ -128,17 +128,19 @@ function providerInterruptError(reason: unknown): Error {
 }
 
 function providerInputError(reason: unknown): Error {
-  if (reason === 'not_active') return new Error('This Codex session is not available to continue. Refresh the Work Room and try again.');
-  if (reason === 'unsupported_provider') return new Error('Only Codex Work Rooms accept direct messages.');
-  if (reason === 'state_changed') return new Error('Codex changed state before the message was sent. Wait for the Work Room to refresh, then try again.');
-  if (reason === 'state_unconfirmed') return new Error('The Host could not confirm the Codex state. Refresh the Work Room, then try again.');
+  if (reason === 'not_active') return new Error('This provider session is not available to continue. Refresh the Work Room and try again.');
+  if (reason === 'unsupported_provider') return new Error('This provider does not support direct Work Room messages.');
+  if (reason === 'state_changed') return new Error('The provider changed state before the message was sent. Wait for the Work Room to refresh, then try again.');
+  if (reason === 'state_unconfirmed') return new Error('The Host could not confirm the provider state. Refresh the Work Room, then try again.');
   if (reason === 'invalid_request' || reason === 'invalid_revision') return new Error('The message could not be sent. Check it and try again.');
-  return new Error('The Host rejected the Codex message. Try again.');
+  return new Error('The Host rejected the provider message. Try again.');
 }
 
 function providerStateRevision(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
+
+const directMessageProviders = new Set(['codex', 'claude_code']);
 
 function providerApprovalContext(data: Record<string, unknown>) {
   const provider = data.provider;
@@ -677,24 +679,28 @@ export class RemoteAgent {
   }
 
   /**
-   * Send a message directly to a native Codex Work Room. A live turn receives
-   * `turn/steer`; a terminal, owned thread is resumed by the Host without an
+   * Send a message directly to a supported native provider Work Room. The Host
+   * either steers a live turn or resumes an owned terminal session without an
    * outer COAI turn. Resolution only confirms that precise Host handoff.
    */
   sendProviderInput(invocationId: string, text: string): Promise<ProviderInputAcknowledgement> {
     const content = text.trim();
     if (!invocationId || invocationId.length > 512 || !content || content.length > 12_000) {
-      return Promise.reject(new Error('Enter a message up to 12,000 characters for Codex.'));
+      return Promise.reject(new Error('Enter a provider message up to 12,000 characters.'));
     }
     if (this._pendingProviderInput) {
-      return Promise.reject(new Error('A Codex message is already being sent.'));
+      return Promise.reject(new Error('A provider message is already being sent.'));
     }
     const invocation = this._chatItems.find(
       (item): item is Extract<ChatItem, { type: 'provider_invocation' }> =>
         item.type === 'provider_invocation' && item.id === invocationId,
     );
-    if (invocation?.provider !== 'codex' || !providerStateRevision(invocation.stateRevision)) {
-      return Promise.reject(new Error('The Codex Work Room is not ready to receive a message.'));
+    if (
+      !invocation
+      || !directMessageProviders.has(invocation.provider)
+      || !providerStateRevision(invocation.stateRevision)
+    ) {
+      return Promise.reject(new Error('This provider Work Room is not ready to receive a message.'));
     }
     const requestId = generateUUID();
     const stateRevision = invocation.stateRevision;
@@ -704,7 +710,7 @@ export class RemoteAgent {
         if (pending?.requestId !== requestId) return;
         this._rejectProviderInput(
           pending,
-          new Error('The Host did not confirm the Codex message. You can try again.'),
+          new Error('The Host did not confirm the provider message. You can try again.'),
         );
       }, PROVIDER_INPUT_ACK_TIMEOUT_MS);
       const pending: PendingProviderInput = {
@@ -961,7 +967,7 @@ export class RemoteAgent {
     if (this._pendingProviderInput) {
       this._rejectProviderInput(
         this._pendingProviderInput,
-        new Error('Connection reset before the Codex message was acknowledged.'),
+        new Error('Connection reset before the provider message was acknowledged.'),
       );
     }
     this._connectionEpoch += 1;
@@ -1294,7 +1300,7 @@ export class RemoteAgent {
         ) {
           this._rejectProviderInput(
             pending,
-            new Error('The Host did not prove the message applies to the current Codex state.'),
+            new Error('The Host did not prove the message applies to the current provider state.'),
           );
           return;
         }
@@ -1709,7 +1715,7 @@ export class RemoteAgent {
     if (this._pendingProviderInput) {
       this._rejectProviderInput(
         this._pendingProviderInput,
-        new Error('Connection closed before the Codex message was acknowledged.'),
+        new Error('Connection closed before the provider message was acknowledged.'),
       );
     }
 
@@ -1833,7 +1839,7 @@ export class RemoteAgent {
     if (this._pendingProviderInput) {
       this._rejectProviderInput(
         this._pendingProviderInput,
-        new Error('Connection closed before the Codex message was acknowledged.'),
+        new Error('Connection closed before the provider message was acknowledged.'),
       );
     }
     if (this._ws) {
