@@ -13,6 +13,55 @@ function apply(items: ChatItem[], event: Record<string, unknown>) {
   mapEventToChatItem(items, event, item => items.push(item as ChatItem));
 }
 
+const codexPermission = (revision: number) => ({
+  provider: 'codex',
+  activeOptionId: 'codex:workspace-ask',
+  appliesTo: 'subsequent_turn',
+  effectiveRevision: revision,
+  options: [
+    {
+      id: 'codex:read-only', nativeProfileId: ':read-only', reviewer: 'user',
+      label: 'Read Only', description: 'Codex can inspect the workspace but cannot change it.',
+      risk: 'standard', selectable: true,
+    },
+    {
+      id: 'codex:workspace-ask', nativeProfileId: ':workspace', reviewer: 'user',
+      label: 'Ask for approval', description: 'Codex can work in the workspace and asks before protected actions.',
+      risk: 'standard', selectable: true,
+    },
+    {
+      id: 'codex:workspace-auto', nativeProfileId: ':workspace', reviewer: 'auto',
+      label: 'Approve for me', description: 'Codex automatically reviews actions inside the workspace boundary.',
+      risk: 'standard', selectable: true,
+    },
+    {
+      id: 'codex:full-access', nativeProfileId: ':danger-full-access', reviewer: 'auto',
+      label: 'Full Access', description: 'Codex can act outside the workspace boundary for the next provider turn.',
+      risk: 'elevated', selectable: false, disabledReason: 'Host permission ceiling is Auto.',
+    },
+  ],
+});
+
+test('preserves a bounded provider-native permission catalog at the exact lifecycle revision', () => {
+  const items: ChatItem[] = [];
+  apply(items, {
+    type: 'provider_invocation', invocationId: 'codex:permissions', parentToolCallId: 'permissions',
+    provider: 'codex', providerDisplayName: 'Codex', status: 'completed', stateRevision: 4,
+    providerPermission: codexPermission(4),
+  });
+
+  expect(items[0]).toMatchObject({
+    type: 'provider_invocation', stateRevision: 4,
+    providerPermission: codexPermission(4),
+  });
+
+  const malformed = normalizeProviderInvocationSnapshot({
+    ...(items[0] as Extract<ChatItem, { type: 'provider_invocation' }>),
+    providerPermission: { ...codexPermission(3), effectiveRevision: 3 } as any,
+  });
+  expect(malformed.providerPermission).toBeUndefined();
+});
+
 test('replaces the parent tool with one provider card and nests child activity', () => {
   const items: ChatItem[] = [{
     id: 'call-7', type: 'tool_call', name: 'codex', status: 'running', args: { prompt: 'fix it' },

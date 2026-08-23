@@ -46,13 +46,13 @@
 import * as address from '../address';
 import {
   AgentInfo, AgentStatus, ChatItem, ChatItemType, ConnectionState,
-  ConnectOptions, Mode, PlanEntry, ProviderApprovalPresentation, ProviderInputAcknowledgement, ProviderInterruptAcknowledgement, RemoteSessionStatus, ResolvedEndpoint, Response, SessionState, WebSocketCtor, WebSocketLike,
+  ConnectOptions, Mode, PlanEntry, ProviderApprovalPresentation, ProviderInputAcknowledgement, ProviderInterruptAcknowledgement, ProviderPermissionAcknowledgement, RemoteSessionStatus, ResolvedEndpoint, Response, SessionState, WebSocketCtor, WebSocketLike,
 } from './types';
 import {
   AgentInfoSource, getWebSocketCtor, generateUUID, normalizeRelayUrl, resolveEndpoint, toAgentInfo,
 } from './endpoint';
 import { ensureSigner, signPayload, type MessageSigner } from './auth';
-import { mapEventToChatItem, normalizeProviderInvocationSnapshot } from './chat-item-mapper';
+import { mapEventToChatItem, normalizeProviderInvocationSnapshot, normalizeProviderPermissionState } from './chat-item-mapper';
 import { OIP_PROTOCOL, OipCompatibilityError, supportsOip } from './protocol';
 import { isMode, normalizeChatItems, normalizeSessionState, validatedModeState } from './mode';
 import {
@@ -95,6 +95,16 @@ interface PendingProviderInput {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface PendingProviderPermission {
+  requestId: string;
+  invocationId: string;
+  optionId: string;
+  observedRevision: number;
+  resolve: (acknowledgement: ProviderPermissionAcknowledgement) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 interface ReconnectReadyWaiter {
   resolve: () => void;
   reject: (error: Error) => void;
@@ -103,6 +113,7 @@ interface ReconnectReadyWaiter {
 const MODE_CHANGE_TIMEOUT_MS = 30000;
 const PROVIDER_INTERRUPT_ACK_TIMEOUT_MS = 10000;
 const PROVIDER_INPUT_ACK_TIMEOUT_MS = 10000;
+const PROVIDER_PERMISSION_ACK_TIMEOUT_MS = 10000;
 const WEBSOCKET_OPEN = 1;
 
 function approvalRejectMode(value: unknown): ApprovalRejectMode {
@@ -134,6 +145,15 @@ function providerInputError(reason: unknown): Error {
   if (reason === 'state_unconfirmed') return new Error('The Host could not confirm the provider state. Refresh the Work Room, then try again.');
   if (reason === 'invalid_request' || reason === 'invalid_revision') return new Error('The message could not be sent. Check it and try again.');
   return new Error('The Host rejected the provider message. Try again.');
+}
+
+function providerPermissionError(reason: unknown): Error {
+  if (reason === 'operator_required') return new Error('Only the Host Operator can change provider permissions.');
+  if (reason === 'ceiling_denied') return new Error('The Host permission ceiling does not allow that provider profile.');
+  if (reason === 'confirmation_required') return new Error('Confirm the provider Full Access risk before applying it.');
+  if (reason === 'stale_revision') return new Error('The provider state changed. Refresh the Work Room and try again.');
+  if (reason === 'not_owner' || reason === 'not_found') return new Error('This provider Work Room is not available to change.');
+  return new Error('The Host rejected the provider permission change.');
 }
 
 function providerStateRevision(value: unknown): value is number {
@@ -272,6 +292,7 @@ export class RemoteAgent {
   private _interruptSent = false;
   private _pendingProviderInterrupt: PendingProviderInterrupt | null = null;
   private _pendingProviderInput: PendingProviderInput | null = null;
+  private _pendingProviderPermission: PendingProviderPermission | null = null;
 
   // Promise resolution for current input() call
   private _inputResolve: ((value: Response) => void) | null = null;
@@ -739,6 +760,66 @@ export class RemoteAgent {
     });
   }
 
+  /** Commit one provider-native profile for subsequent work after Host acknowledgement. */
+  setProviderPermission(
+    invocationId: string,
+    optionId: string,
+    confirmRisk = false,
+  ): Promise<ProviderPermissionAcknowledgement> {
+    if (this._pendingProviderPermission) {
+      return Promise.reject(new Error('A provider permission change is already pending.'));
+    }
+    const invocation = this._chatItems.find(
+      (item): item is Extract<ChatItem, { type: 'provider_invocation' }> =>
+        item.type === 'provider_invocation' && item.id === invocationId,
+    );
+    const option = invocation?.providerPermission?.options.find(item => item.id === optionId);
+    if (
+      !invocation
+      || !providerStateRevision(invocation.stateRevision)
+      || !invocation.providerPermission
+      || invocation.providerPermission.effectiveRevision !== invocation.stateRevision
+      || !option
+      || !option.selectable
+    ) {
+      return Promise.reject(new Error('This provider profile is not available for the current Work Room state.'));
+    }
+    if (option.risk === 'elevated' && confirmRisk !== true) {
+      return Promise.reject(new Error('Confirm the provider Full Access risk before applying it.'));
+    }
+    const requestId = generateUUID();
+    const observedRevision = invocation.stateRevision;
+    return new Promise<ProviderPermissionAcknowledgement>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const pending = this._pendingProviderPermission;
+        if (pending?.requestId !== requestId) return;
+        this._rejectProviderPermission(
+          pending,
+          new Error('The Host did not confirm the provider permission change. Try again.'),
+        );
+      }, PROVIDER_PERMISSION_ACK_TIMEOUT_MS);
+      const pending: PendingProviderPermission = {
+        requestId, invocationId, optionId, observedRevision, resolve, reject, timer,
+      };
+      this._pendingProviderPermission = pending;
+      try {
+        this._sendAuthenticated({
+          type: 'PROVIDER_PERMISSION_CHANGE',
+          invocationId,
+          requestId,
+          stateRevision: observedRevision,
+          optionId,
+          confirmRisk,
+        });
+      } catch (cause) {
+        this._rejectProviderPermission(
+          pending,
+          cause instanceof Error ? cause : new Error(String(cause)),
+        );
+      }
+    });
+  }
+
   private _resolveProviderInterrupt(pending: PendingProviderInterrupt): void {
     if (this._pendingProviderInterrupt !== pending) return;
     clearTimeout(pending.timer);
@@ -776,6 +857,25 @@ export class RemoteAgent {
     if (this._pendingProviderInput !== pending) return;
     clearTimeout(pending.timer);
     this._pendingProviderInput = null;
+    pending.reject(error);
+    this._onMessage?.();
+  }
+
+  private _resolveProviderPermission(
+    pending: PendingProviderPermission,
+    stateRevision: number,
+  ): void {
+    if (this._pendingProviderPermission !== pending) return;
+    clearTimeout(pending.timer);
+    this._pendingProviderPermission = null;
+    pending.resolve({ invocationId: pending.invocationId, stateRevision });
+    this._onMessage?.();
+  }
+
+  private _rejectProviderPermission(pending: PendingProviderPermission, error: Error): void {
+    if (this._pendingProviderPermission !== pending) return;
+    clearTimeout(pending.timer);
+    this._pendingProviderPermission = null;
     pending.reject(error);
     this._onMessage?.();
   }
@@ -968,6 +1068,12 @@ export class RemoteAgent {
       this._rejectProviderInput(
         this._pendingProviderInput,
         new Error('Connection reset before the provider message was acknowledged.'),
+      );
+    }
+    if (this._pendingProviderPermission) {
+      this._rejectProviderPermission(
+        this._pendingProviderPermission,
+        new Error('Connection reset before the provider permission change was acknowledged.'),
       );
     }
     this._connectionEpoch += 1;
@@ -1308,6 +1414,44 @@ export class RemoteAgent {
       } else {
         this._rejectProviderInput(pending, providerInputError(data.reason));
       }
+      return;
+    }
+
+    if (data?.type === 'PROVIDER_PERMISSION_ACK') {
+      const pending = this._pendingProviderPermission;
+      if (
+        !pending
+        || data.requestId !== pending.requestId
+        || data.invocationId !== pending.invocationId
+      ) return;
+      if (data.accepted !== true) {
+        this._rejectProviderPermission(pending, providerPermissionError(data.reason));
+        return;
+      }
+      const invocation = this._chatItems.find(
+        (item): item is Extract<ChatItem, { type: 'provider_invocation' }> =>
+          item.type === 'provider_invocation' && item.id === pending.invocationId,
+      );
+      const revision = providerStateRevision(data.stateRevision) ? data.stateRevision : undefined;
+      const permission = invocation && revision
+        ? normalizeProviderPermissionState(data.providerPermission, invocation.provider, revision)
+        : undefined;
+      if (
+        !invocation
+        || revision === undefined
+        || revision <= pending.observedRevision
+        || !permission
+        || permission.activeOptionId !== pending.optionId
+      ) {
+        this._rejectProviderPermission(
+          pending,
+          new Error('The Host did not prove the provider permission change applies to a newer state.'),
+        );
+        return;
+      }
+      invocation.stateRevision = revision;
+      invocation.providerPermission = permission;
+      this._resolveProviderPermission(pending, revision);
       return;
     }
 
@@ -1718,6 +1862,12 @@ export class RemoteAgent {
         new Error('Connection closed before the provider message was acknowledged.'),
       );
     }
+    if (this._pendingProviderPermission) {
+      this._rejectProviderPermission(
+        this._pendingProviderPermission,
+        new Error('Connection closed before the provider permission change was acknowledged.'),
+      );
+    }
 
     if (this._pendingModeChange) {
       this._rejectModeChange(
@@ -1840,6 +1990,12 @@ export class RemoteAgent {
       this._rejectProviderInput(
         this._pendingProviderInput,
         new Error('Connection closed before the provider message was acknowledged.'),
+      );
+    }
+    if (this._pendingProviderPermission) {
+      this._rejectProviderPermission(
+        this._pendingProviderPermission,
+        new Error('Connection closed before the provider permission change was acknowledged.'),
       );
     }
     if (this._ws) {

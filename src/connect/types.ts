@@ -30,6 +30,32 @@ export interface ProviderInputAcknowledgement {
   stateRevision: number;
 }
 
+/** Proof that the Host committed a provider-native profile at a newer revision. */
+export interface ProviderPermissionAcknowledgement {
+  invocationId: string;
+  stateRevision: number;
+}
+
+export interface ProviderPermissionOption {
+  id: string;
+  nativeProfileId: string;
+  reviewer: 'user' | 'auto' | 'provider';
+  label: string;
+  description: string;
+  risk: 'standard' | 'elevated';
+  selectable: boolean;
+  disabledReason?: string;
+}
+
+/** Host-authored provider state; distinct from outer COAI mode and approvals. */
+export interface ProviderPermissionState {
+  provider: 'codex' | 'claude_code';
+  activeOptionId: string;
+  options: ProviderPermissionOption[];
+  appliesTo: 'subsequent_turn';
+  effectiveRevision: number;
+}
+
 /** Plain-text conversation content explicitly exchanged with a native provider. */
 export interface ProviderMessage {
   id: string;
@@ -86,6 +112,7 @@ export interface ProviderInvocationItem {
   /** Optional real preview; absent means the UI must not fabricate a thumbnail. */
   artifact?: ProviderArtifact;
   permissionMode?: 'manual' | 'auto_approve' | 'full_access';
+  providerPermission?: ProviderPermissionState;
   status: ProviderInvocationStatus;
   activities: ProviderActivity[];
   /** Direct user/Codex conversation, separate from redacted execution activity. */

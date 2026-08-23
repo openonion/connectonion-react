@@ -91,6 +91,20 @@ Codex and Claude Code child activity arrives as ordinary OIP
 `provider_invocation`, `tool_call`, and `tool_result` events. The package nests
 that activity under one provider card without requiring another transport.
 
+### Provider-native Work Room permissions
+
+A valid `provider_invocation.providerPermission` exposes the finite Codex or
+Claude Code catalog authored by Host for that exact positive `stateRevision`.
+The nested state is separate from outer COAI mode and individual approvals.
+Malformed, stale, mismatched, oversized, or unknown catalogs are discarded.
+
+Call `setProviderPermission(invocationId, optionId, confirmRisk?)` on
+`RemoteAgent` or the object returned by `useAgentForHuman`. The SDK sends a
+signed, revision-bound request and does not update local authority
+optimistically. It resolves only after a matching accepted Host ACK contains a
+strictly newer valid state with the requested active option. Elevated native
+profiles require the caller to pass the explicit confirmation flag.
+
 ## Browser identity
 
 `initializeBrowserIdentity()` stores a non-extractable Ed25519 key in IndexedDB.

@@ -266,6 +266,131 @@ test('resolves a direct Codex Work Room message only after its matching Host ack
   expect(agent._pendingProviderInput).toBeNull();
 });
 
+test('commits a provider permission only after a newer authoritative Host acknowledgement', async () => {
+  const agent = new RemoteAgent('0x' + 'a'.repeat(64), {}) as any;
+  const socket = new FakeSocket();
+  agent._ws = socket;
+  agent._authenticated = true;
+  const permission = {
+    provider: 'codex', activeOptionId: 'codex:workspace-ask',
+    appliesTo: 'subsequent_turn', effectiveRevision: 4,
+    options: [{
+      id: 'codex:workspace-ask', nativeProfileId: ':workspace', reviewer: 'user',
+      label: 'Ask for approval', description: 'Ask before protected actions.',
+      risk: 'standard', selectable: true,
+    }, {
+      id: 'codex:workspace-auto', nativeProfileId: ':workspace', reviewer: 'auto',
+      label: 'Approve for me', description: 'Automatically review workspace actions.',
+      risk: 'standard', selectable: true,
+    }],
+  };
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'provider_invocation', invocationId: 'codex:outer-call',
+    parentToolCallId: 'outer-call', provider: 'codex', providerDisplayName: 'Codex',
+    status: 'completed', stateRevision: 4, providerPermission: permission,
+  }) });
+
+  const changing = agent.setProviderPermission(
+    'codex:outer-call',
+    'codex:workspace-auto',
+  );
+  const request = JSON.parse(socket.sent[0]);
+  expect(request).toEqual(expect.objectContaining({
+    type: 'PROVIDER_PERMISSION_CHANGE', invocationId: 'codex:outer-call',
+    optionId: 'codex:workspace-auto', stateRevision: 4, confirmRisk: false,
+    requestId: expect.any(String),
+  }));
+  expect(agent.ui[0].providerPermission.activeOptionId).toBe('codex:workspace-ask');
+
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'PROVIDER_PERMISSION_ACK', requestId: request.requestId,
+    invocationId: 'codex:outer-call', accepted: true, stateRevision: 5,
+    providerPermission: {
+      ...permission, activeOptionId: 'codex:workspace-auto', effectiveRevision: 5,
+    },
+  }) });
+
+  await expect(changing).resolves.toEqual({
+    invocationId: 'codex:outer-call', stateRevision: 5,
+  });
+  expect(agent.ui[0]).toMatchObject({
+    stateRevision: 5,
+    providerPermission: { activeOptionId: 'codex:workspace-auto', effectiveRevision: 5 },
+  });
+});
+
+test('fails closed for an elevated provider profile without separate confirmation', async () => {
+  const agent = new RemoteAgent('0x' + 'a'.repeat(64), {}) as any;
+  const socket = new FakeSocket();
+  agent._ws = socket;
+  agent._authenticated = true;
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'provider_invocation', invocationId: 'codex:outer-call',
+    parentToolCallId: 'outer-call', provider: 'codex', providerDisplayName: 'Codex',
+    status: 'completed', stateRevision: 4,
+    providerPermission: {
+      provider: 'codex', activeOptionId: 'codex:workspace-ask',
+      appliesTo: 'subsequent_turn', effectiveRevision: 4,
+      options: [{
+        id: 'codex:workspace-ask', nativeProfileId: ':workspace', reviewer: 'user',
+        label: 'Ask for approval', description: 'Ask before protected actions.',
+        risk: 'standard', selectable: true,
+      }, {
+        id: 'codex:full-access', nativeProfileId: ':danger-full-access', reviewer: 'auto',
+        label: 'Full Access', description: 'Allow work outside the workspace.',
+        risk: 'elevated', selectable: true,
+      }],
+    },
+  }) });
+
+  await expect(agent.setProviderPermission(
+    'codex:outer-call',
+    'codex:full-access',
+  )).rejects.toThrow('Confirm the provider Full Access risk before applying it.');
+  expect(socket.sent).toHaveLength(0);
+});
+
+test('rejects a provider permission acknowledgement that does not prove newer state', async () => {
+  const agent = new RemoteAgent('0x' + 'a'.repeat(64), {}) as any;
+  const socket = new FakeSocket();
+  agent._ws = socket;
+  agent._authenticated = true;
+  const permission = {
+    provider: 'codex', activeOptionId: 'codex:workspace-ask',
+    appliesTo: 'subsequent_turn', effectiveRevision: 4,
+    options: [{
+      id: 'codex:workspace-ask', nativeProfileId: ':workspace', reviewer: 'user',
+      label: 'Ask for approval', description: 'Ask before protected actions.',
+      risk: 'standard', selectable: true,
+    }, {
+      id: 'codex:workspace-auto', nativeProfileId: ':workspace', reviewer: 'auto',
+      label: 'Approve for me', description: 'Automatically review workspace actions.',
+      risk: 'standard', selectable: true,
+    }],
+  };
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'provider_invocation', invocationId: 'codex:outer-call',
+    parentToolCallId: 'outer-call', provider: 'codex', providerDisplayName: 'Codex',
+    status: 'completed', stateRevision: 4, providerPermission: permission,
+  }) });
+
+  const changing = agent.setProviderPermission('codex:outer-call', 'codex:workspace-auto');
+  const request = JSON.parse(socket.sent[0]);
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'PROVIDER_PERMISSION_ACK', requestId: request.requestId,
+    invocationId: 'codex:outer-call', accepted: true, stateRevision: 4,
+    providerPermission: permission,
+  }) });
+
+  await expect(changing).rejects.toThrow(
+    'The Host did not prove the provider permission change applies to a newer state.',
+  );
+  expect(agent.ui[0]).toMatchObject({
+    stateRevision: 4,
+    providerPermission: { activeOptionId: 'codex:workspace-ask' },
+  });
+});
+
 test('sends a direct Claude Code Work Room message through the same provider envelope', async () => {
   const agent = new RemoteAgent('0x' + 'a'.repeat(64), {}) as any;
   const socket = new FakeSocket();
