@@ -1,12 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.4.2-rc.0 — 2026-08-23
 
 ### Added
 
 - Preserve Core's normalized managed-usage fields, including uncached input,
   cache reads, cache writes and TTL classes, cache reporting status, provider
   identity, and the server pricing metadata used for the final charge.
+
+### Release boundary
+
+- This is the first coordinated React release candidate for ConnectOnion
+  `1.7.0rc1`; stable npm `latest` remains `0.4.1`.
+- Publish through the protected tag workflow under the npm `rc` dist-tag.
+- O Chat must pin this exact package and repeat the installed Core, real
+  `co ai`/`co browser`, Work Room, reconnect, and UI-review gate before 1.7
+  can be promoted unchanged.
 
 ## 0.4.2-beta.0 — 2026-08-21
 
