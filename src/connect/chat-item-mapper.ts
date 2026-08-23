@@ -10,7 +10,7 @@
  *     renders its output in `components/chat/messages/coding-agent-workroom.tsx` under
  *     the reader contract in `docs/WORKROOM.md`. Change all three layers together.
  */
-import { ChatItem, ChatItemType, LLMUsage, ProviderArtifact } from './types';
+import { ChatItem, ChatItemType, LLMUsage, ProviderArtifact, ProviderPermissionState } from './types';
 import { decodeIncomingEvent } from './wire-events';
 
 const SUCCESSFUL_TOOL_RESULTS = new Set(['success', 'done', 'completed']);
@@ -164,6 +164,71 @@ function providerMessages(value: unknown) {
   });
 }
 
+function boundedProviderText(value: unknown, maximum: number): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  if (!text || text.length > maximum || /[\u0000-\u001f\u007f]/.test(text)) return undefined;
+  return text;
+}
+
+export function normalizeProviderPermissionState(
+  value: unknown,
+  provider: 'codex' | 'claude_code',
+  stateRevision: number | undefined,
+): ProviderPermissionState | undefined {
+  if (!value || typeof value !== 'object' || stateRevision === undefined) return undefined;
+  const raw = value as Record<string, unknown>;
+  if (
+    raw.provider !== provider
+    || raw.appliesTo !== 'subsequent_turn'
+    || providerStateRevision(raw.effectiveRevision) !== stateRevision
+    || !Array.isArray(raw.options)
+    || raw.options.length < 1
+    || raw.options.length > 12
+  ) return undefined;
+  const activeOptionId = providerCorrelationId(raw.activeOptionId);
+  if (!activeOptionId) return undefined;
+  const seen = new Set<string>();
+  const options = raw.options.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== 'object') return [];
+    const option = candidate as Record<string, unknown>;
+    const id = providerCorrelationId(option.id);
+    const nativeProfileId = providerCorrelationId(option.nativeProfileId);
+    const label = boundedProviderText(option.label, 64);
+    const description = boundedProviderText(option.description, 200);
+    const reviewer = option.reviewer;
+    const risk = option.risk;
+    if (
+      !id || seen.has(id) || !nativeProfileId || !label || !description
+      || (reviewer !== 'user' && reviewer !== 'auto' && reviewer !== 'provider')
+      || (risk !== 'standard' && risk !== 'elevated')
+      || typeof option.selectable !== 'boolean'
+    ) return [];
+    const disabledReason = boundedProviderText(option.disabledReason, 160);
+    if (!option.selectable && !disabledReason) return [];
+    seen.add(id);
+    return [{
+      id,
+      nativeProfileId,
+      reviewer: reviewer as 'user' | 'auto' | 'provider',
+      label,
+      description,
+      risk: risk as 'standard' | 'elevated',
+      selectable: option.selectable,
+      ...(!option.selectable && { disabledReason }),
+    }];
+  });
+  const activeOption = options.find(option => option.id === activeOptionId);
+  if (options.length !== raw.options.length || !activeOption?.selectable) return undefined;
+  return {
+    provider,
+    activeOptionId,
+    options,
+    appliesTo: 'subsequent_turn',
+    effectiveRevision: stateRevision,
+  };
+}
+
 function safeProviderArtifact(
   id: unknown,
   kind: unknown,
@@ -227,12 +292,18 @@ export function normalizeProviderInvocationSnapshot(
   const workroomId = providerCorrelationId(item.workroomId);
   const continuationOf = providerCorrelationId(item.continuationOf);
   const messages = providerMessages(item.messages);
+  const providerPermission = normalizeProviderPermissionState(
+    item.providerPermission,
+    item.provider,
+    stateRevision,
+  );
   const {
     artifact: _artifact,
     stateRevision: _stateRevision,
     workroomId: _workroomId,
     continuationOf: _continuationOf,
     messages: _messages,
+    providerPermission: _providerPermission,
     ...withoutUntrustedFields
   } = item;
   return {
@@ -241,6 +312,7 @@ export function normalizeProviderInvocationSnapshot(
     ...(workroomId && { workroomId }),
     ...(continuationOf && { continuationOf }),
     ...(stateRevision !== undefined && { stateRevision }),
+    ...(providerPermission && { providerPermission }),
     ...(artifact && artifact.stateRevision === stateRevision && { artifact }),
   } as Extract<ChatItem, { type: 'provider_invocation' }>;
 }
@@ -310,6 +382,11 @@ export function mapEventToChatItem(
       const stateRevision = providerStateRevision(decoded.stateRevision);
       const workroomId = providerCorrelationId(decoded.workroomId);
       const continuationOf = providerCorrelationId(decoded.continuationOf);
+      const providerPermission = normalizeProviderPermissionState(
+        decoded.providerPermission,
+        provider,
+        stateRevision,
+      );
       const update = {
         ...(taskTitle && { taskTitle }),
         ...(currentSummary && { currentSummary }),
@@ -324,6 +401,7 @@ export function mapEventToChatItem(
         ...(stateRevision !== undefined && { stateRevision }),
         ...(workroomId && { workroomId }),
         ...(continuationOf && { continuationOf }),
+        ...(providerPermission && { providerPermission }),
       };
       if (existing) {
         // Provider state is replayed after reconnect. Once a versioned Host has
