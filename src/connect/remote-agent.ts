@@ -545,8 +545,8 @@ export class RemoteAgent {
       };
 
       ws.onmessage = (evt: { data: unknown }) => this._handleMessage(evt);
-      ws.onerror = () => this._handleConnectionLoss();
-      ws.onclose = () => this._handleConnectionLoss();
+      ws.onerror = () => this._handleSocketConnectionLoss(ws);
+      ws.onclose = () => this._handleSocketConnectionLoss(ws);
     });
   }
 
@@ -1293,8 +1293,8 @@ export class RemoteAgent {
 
     // Wire up persistent message handler
     ws.onmessage = (evt: { data: unknown }) => this._handleMessage(evt);
-    ws.onerror = () => this._handleConnectionLoss();
-    ws.onclose = () => this._handleConnectionLoss();
+    ws.onerror = () => this._handleSocketConnectionLoss(ws);
+    ws.onclose = () => this._handleSocketConnectionLoss(ws);
 
     // Send CONNECT with session (conversation history)
     const payload: Record<string, unknown> = { timestamp: Math.floor(Date.now() / 1000) };
@@ -1892,6 +1892,16 @@ export class RemoteAgent {
       reject(connectionError);
     }
     this._onMessage?.();
+  }
+
+  /**
+   * A replaced WebSocket can deliver an already-queued error/close after its
+   * successor has authenticated. Only the socket this RemoteAgent still owns
+   * may transition the shared session state to disconnected.
+   */
+  private _handleSocketConnectionLoss(ws: WebSocketLike): void {
+    if (this._ws !== ws) return;
+    this._handleConnectionLoss();
   }
 
   private _isSocketOpen(ws: WebSocketLike | null): boolean {
