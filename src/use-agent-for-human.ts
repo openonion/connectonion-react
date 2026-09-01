@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AgentInfo,
+  ControlCenterAppDescriptor,
   ChatItem,
   PlanEntry,
   AgentStatus,
@@ -66,6 +67,9 @@ export interface UseAgentForHumanReturn {
    * (on connect and after each run). `null` until the first snapshot arrives.
    */
   dashboardHtml: string | null;
+
+  /** Latest authenticated, immutable full-Web Control Center descriptor. */
+  controlCenterApp: ControlCenterAppDescriptor | null;
 
   /**
    * The agent's full self-description — name, model, tools, every skill, balance —
@@ -235,6 +239,10 @@ export function useAgentForHuman(
   // Latest dashboard.html snapshot the Host pushed over this connection.
   const [dashboardHtml, setDashboardHtml] = useState<string | null>(agent.dashboardHtml);
 
+  const [controlCenterApp, setControlCenterApp] = useState<ControlCenterAppDescriptor | null>(
+    agent.controlCenterApp,
+  );
+
   // Authenticated agent profile — arrives right after CONNECTED, so a cached agent
   // already holds it and a cold one fills it in on the next flush.
   const [profile, setProfile] = useState<AgentInfo | null>(agent.profile);
@@ -262,6 +270,7 @@ export function useAgentForHuman(
       setStatus(agent.status);
       setConnectionState(agent.connectionState);
       setDashboardHtml(agent.dashboardHtml);
+      setControlCenterApp(agent.controlCenterApp);
       setProfile(agent.profile);
       setAvailableModes([...agent.availableModes]);
       setModeChangePending(agent.modeChangePending);
@@ -449,6 +458,7 @@ export function useAgentForHuman(
     isProcessing: status !== 'idle',
     error,
     dashboardHtml,
+    controlCenterApp,
     profile,
     checkSessionStatus: (sid: string) => agent.checkSessionStatus(sid),
     mode: session?.mode || 'auto',

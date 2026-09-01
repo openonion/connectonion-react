@@ -45,7 +45,7 @@
  */
 import * as address from '../address';
 import {
-  AgentInfo, AgentStatus, ChatItem, ChatItemType, ConnectionState,
+  AgentInfo, AgentStatus, ChatItem, ChatItemType, ConnectionState, ControlCenterAppDescriptor,
   ConnectOptions, Mode, PlanEntry, ProviderApprovalPresentation, ProviderInputAcknowledgement, ProviderInterruptAcknowledgement, ProviderPermissionAcknowledgement, RemoteSessionStatus, ResolvedEndpoint, Response, SessionState, WebSocketCtor, WebSocketLike,
 } from './types';
 import {
@@ -62,6 +62,25 @@ import {
   hostSessionModeState,
   normalizePlanEntries,
 } from './wire-events';
+
+const CONTROL_CENTER_CAPABILITIES = new Set([
+  'camera', 'microphone', 'geolocation', 'clipboard-read', 'clipboard-write', 'fullscreen',
+]);
+
+function isControlCenterAppDescriptor(value: unknown): value is ControlCenterAppDescriptor {
+  if (!value || typeof value !== 'object') return false;
+  const app = value as Partial<ControlCenterAppDescriptor>;
+  return app.schema === 'connectonion.control-app/1'
+    && typeof app.revision === 'string'
+    && /^sha256:[a-f0-9]{64}$/.test(app.revision)
+    && typeof app.url === 'string'
+    && app.sdk_version === '1'
+    && Boolean(app.review && ['reviewing', 'approved', 'blocked'].includes(app.review.status))
+    && (app.capabilities === undefined || (
+      Array.isArray(app.capabilities)
+      && app.capabilities.every(capability => CONTROL_CENTER_CAPABILITIES.has(capability))
+    ));
+}
 
 interface PendingApproval {
   chatItemId: string;
@@ -277,6 +296,10 @@ export class RemoteAgent {
   // Latest dashboard.html snapshot pushed by the Host (on connect + after each run).
   _dashboardHtml: string | null = null;
 
+  // Kept separate from legacy dashboard HTML so markup cannot opt itself into
+  // executable iframe mode. Only the authenticated Host can publish this frame.
+  _controlCenterApp: ControlCenterAppDescriptor | null = null;
+
   // The agent's own account of itself, pushed once right after CONNECTED.
   // This is the *authenticated* answer: /info and the relay directory are open to
   // anyone who can reach the agent, so they publish a filtered subset (project-tree
@@ -357,6 +380,7 @@ export class RemoteAgent {
   get modeChangePending(): boolean { return this._pendingModeChange !== null; }
   get error(): Error | null { return this._error || null; }
   get dashboardHtml(): string | null { return this._dashboardHtml; }
+  get controlCenterApp(): ControlCenterAppDescriptor | null { return this._controlCenterApp; }
   get profile(): AgentInfo | null { return this._profile; }
 
   // --- Public API ---
@@ -1695,6 +1719,15 @@ export class RemoteAgent {
     // would blank an already-rendered dashboard on one bad push.
     if (data?.type === 'DASHBOARD_SNAPSHOT' && typeof data.html === 'string') {
       this._dashboardHtml = data.html;
+    }
+
+    // A malformed descriptor does not clear the last valid approved revision.
+    if (data?.type === 'CONTROL_CENTER_APP' && isControlCenterAppDescriptor(data.app)) {
+      this._controlCenterApp = {
+        ...data.app,
+        review: { ...data.app.review },
+        ...(data.app.capabilities ? { capabilities: [...data.app.capabilities] } : {}),
+      };
     }
 
     // OUTPUT — resolve input() promise

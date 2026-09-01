@@ -18,6 +18,8 @@ export type {
   AgentInfo,
   AgentAcceptedInputs,
   AgentOnboard,
+  ControlCenterAppDescriptor,
+  ControlCenterCapability,
   SkillInfo,
   Mode,
   PlanEntry,
