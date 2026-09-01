@@ -73,6 +73,29 @@ const agent = new RemoteAgent('0x...', {
 When a host advertises its protocol in `CONNECTED`, the client accepts OIP 0.1
 and reports a clear error for an unsupported protocol or version.
 
+### Retained session synchronization
+
+Hosts that select the experimental `session-sync/0.1` extension expose the
+authenticated identity's retained conversations through typed `RemoteAgent`
+methods:
+
+```ts
+await agent.connect()
+const index = await agent.syncSessions({ cursor: previousCursor })
+const snapshot = await agent.getSession(index.sessions[0].session_id)
+await agent.updateSession(index.sessions[0].session_id, { archived: true }, 7)
+```
+
+For a sidebar/index worker, construct `RemoteAgent` with
+`{ sessionSyncOnly: true }`. That CONNECT authenticates and negotiates the
+extension without creating an empty conversation on Host.
+
+`syncSessions()` and `getSession()` drain protocol pagination before resolving.
+Opaque cursors and Host revisions must be persisted unchanged. All Session Sync
+commands are individually signed, even during compatibility with older OIP
+application frames. Host-retained committed history is authoritative; browser
+storage remains the cache, draft, and unsent-outbox boundary.
+
 ## Modes
 
 The Host exposes exactly three public modes:

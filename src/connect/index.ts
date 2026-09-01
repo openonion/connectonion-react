@@ -16,10 +16,14 @@ export type {
 export { fetchAgentInfo } from './endpoint';
 export {
   OIP_PROTOCOL,
+  OIP_REQUESTED_EXTENSIONS,
+  SESSION_SYNC_EXTENSION,
+  SESSION_SYNC_VERSION,
   OipCompatibilityError,
   supportsOip,
+  supportsSessionSync,
 } from './protocol';
-export { RemoteAgent } from './remote-agent';
+export { RemoteAgent, SessionSyncError } from './remote-agent';
 
 /**
  * Connect to a remote agent.
