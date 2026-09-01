@@ -23,16 +23,35 @@ export type {
   PlanEntry,
   PlanEntryPriority,
   PlanEntryStatus,
+  SessionActivity,
+  SessionOutcome,
+  SessionSummary,
+  SessionRecord,
+  SessionSyncOptions,
+  SessionSyncResult,
+  SessionGetOptions,
+  SessionSnapshot,
+  SessionNotModified,
+  SessionGetResult,
+  SessionMetadataPatch,
+  SessionChangeSet,
   OutgoingMessage,
   HostSessionModeState,
   ApprovalRejectMode,
 } from './connect';
 
 export {
+  connect,
+  RemoteAgent,
+  SessionSyncError,
   fetchAgentInfo,
   OIP_PROTOCOL,
+  OIP_REQUESTED_EXTENSIONS,
+  SESSION_SYNC_EXTENSION,
+  SESSION_SYNC_VERSION,
   OipCompatibilityError,
   supportsOip,
+  supportsSessionSync,
 } from './connect';
 
 // Store types

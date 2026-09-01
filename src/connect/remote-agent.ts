@@ -46,14 +46,20 @@
 import * as address from '../address';
 import {
   AgentInfo, AgentStatus, ChatItem, ChatItemType, ConnectionState,
-  ConnectOptions, Mode, PlanEntry, ProviderApprovalPresentation, ProviderInputAcknowledgement, ProviderInterruptAcknowledgement, ProviderPermissionAcknowledgement, RemoteSessionStatus, ResolvedEndpoint, Response, SessionState, WebSocketCtor, WebSocketLike,
+  ConnectOptions, Mode, PlanEntry, ProviderApprovalPresentation, ProviderInputAcknowledgement, ProviderInterruptAcknowledgement, ProviderPermissionAcknowledgement, RemoteSessionStatus, ResolvedEndpoint, Response, SessionChangeSet, SessionGetOptions, SessionGetResult, SessionMetadataPatch, SessionRecord, SessionSnapshot, SessionState, SessionSummary, SessionSyncOptions, SessionSyncResult, WebSocketCtor, WebSocketLike,
 } from './types';
 import {
   AgentInfoSource, getWebSocketCtor, generateUUID, normalizeRelayUrl, resolveEndpoint, toAgentInfo,
 } from './endpoint';
 import { ensureSigner, signPayload, type MessageSigner } from './auth';
 import { mapEventToChatItem, normalizeProviderInvocationSnapshot, normalizeProviderPermissionState } from './chat-item-mapper';
-import { OIP_PROTOCOL, OipCompatibilityError, supportsOip } from './protocol';
+import {
+  OIP_PROTOCOL,
+  OIP_REQUESTED_EXTENSIONS,
+  OipCompatibilityError,
+  supportsOip,
+  supportsSessionSync,
+} from './protocol';
 import { isMode, normalizeChatItems, normalizeSessionState, validatedModeState } from './mode';
 import {
   ApprovalRejectMode,
@@ -110,11 +116,59 @@ interface ReconnectReadyWaiter {
   reject: (error: Error) => void;
 }
 
+interface PendingSessionRequest {
+  expectedTypes: ReadonlySet<string>;
+  resolve: (frame: Record<string, unknown>) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 const MODE_CHANGE_TIMEOUT_MS = 30000;
 const PROVIDER_INTERRUPT_ACK_TIMEOUT_MS = 10000;
 const PROVIDER_INPUT_ACK_TIMEOUT_MS = 10000;
 const PROVIDER_PERMISSION_ACK_TIMEOUT_MS = 10000;
+const SESSION_SYNC_TIMEOUT_MS = 30000;
 const WEBSOCKET_OPEN = 1;
+
+export class SessionSyncError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly retryable = false,
+    readonly data?: unknown,
+  ) {
+    super(message);
+    this.name = 'SessionSyncError';
+  }
+}
+
+function sessionSummary(value: unknown): SessionSummary | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const item = value as Record<string, unknown>;
+  if (
+    typeof item.session_id !== 'string' || !item.session_id
+    || typeof item.title !== 'string'
+    || typeof item.created_at !== 'string'
+    || typeof item.updated_at !== 'string'
+    || !Number.isSafeInteger(item.revision) || (item.revision as number) < 1
+    || !Number.isSafeInteger(item.last_sequence) || (item.last_sequence as number) < 0
+    || !['idle', 'running', 'waiting'].includes(String(item.activity))
+  ) return null;
+  return { ...item } as unknown as SessionSummary;
+}
+
+function sessionRecord(value: unknown): SessionRecord | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const item = value as Record<string, unknown>;
+  if (
+    !Number.isSafeInteger(item.sequence) || (item.sequence as number) < 1
+    || typeof item.record_id !== 'string' || !item.record_id
+    || !['input', 'output', 'event', 'request'].includes(String(item.kind))
+    || typeof item.occurred_at !== 'string'
+    || typeof item.data !== 'object' || item.data === null
+  ) return null;
+  return { ...item } as unknown as SessionRecord;
+}
 
 function approvalRejectMode(value: unknown): ApprovalRejectMode {
   return value === 'reject_soft' || value === 'reject_explain'
@@ -265,6 +319,7 @@ export class RemoteAgent {
   _directUrl?: string;
   _resolvedEndpoint?: ResolvedEndpoint;
   _endpointResolutionAttempted = false;
+  _sessionSyncOnly = false;
   _WS: WebSocketCtor;
 
   // Public reactive state
@@ -325,6 +380,9 @@ export class RemoteAgent {
   private _reconnectReadyWaiters: ReconnectReadyWaiter[] = [];
   private _pendingApproval: PendingApproval | null = null;
   private _pendingModeChange: PendingModeChange | null = null;
+  private _sessionSyncSupported = false;
+  private _pendingSessionRequests = new Map<string, PendingSessionRequest>();
+  private _sessionChangeListener: ((changes: SessionChangeSet) => void) | null = null;
   private _connectionEpoch = 0;
 
   _onMessage: (() => void) | null = null;
@@ -335,6 +393,7 @@ export class RemoteAgent {
     this._relayUrl = normalizeRelayUrl(options.relayUrl || 'wss://oo.openonion.ai');
     this._directUrl = options.directUrl?.replace(/\/$/, '');
     this._WS = options.wsCtor || getWebSocketCtor();
+    this._sessionSyncOnly = options.sessionSyncOnly === true;
     if (options.keys) this._keys = options.keys;
     if (options.signer) this._signer = options.signer;
   }
@@ -358,6 +417,7 @@ export class RemoteAgent {
   get error(): Error | null { return this._error || null; }
   get dashboardHtml(): string | null { return this._dashboardHtml; }
   get profile(): AgentInfo | null { return this._profile; }
+  get sessionSyncSupported(): boolean { return this._sessionSyncSupported; }
 
   // --- Public API ---
 
@@ -380,6 +440,149 @@ export class RemoteAgent {
       this._error = err instanceof Error ? err : new Error(String(err));
       this._onMessage?.();
       throw err;
+    }
+  }
+
+  /** Discover every retained chat owned by this browser identity. */
+  async syncSessions(options: SessionSyncOptions = {}): Promise<SessionSyncResult> {
+    const sessions: SessionSummary[] = [];
+    const removedSessionIds: string[] = [];
+    let pageToken: string | undefined;
+    let cursor: string | undefined;
+    do {
+      const frame = await this._requestSessionFrame({
+        type: 'SESSION_SYNC',
+        ...(pageToken
+          ? { page_token: pageToken }
+          : options.cursor ? { cursor: options.cursor } : {}),
+        ...(options.limit !== undefined && { limit: options.limit }),
+        include_archived: options.includeArchived ?? false,
+      }, ['SESSION_SYNC_RESULT']);
+      const page = Array.isArray(frame.sessions)
+        ? frame.sessions.map(sessionSummary)
+        : [];
+      if (!Array.isArray(frame.sessions) || page.some(item => item === null)) {
+        throw new SessionSyncError('invalid_response', 'Host returned an invalid session index');
+      }
+      const removed = frame.removed_session_ids;
+      if (!Array.isArray(removed) || removed.some(
+        item => typeof item !== 'string' || !item,
+      )) {
+        throw new SessionSyncError('invalid_response', 'Host returned invalid removed sessions');
+      }
+      sessions.push(...page as SessionSummary[]);
+      removedSessionIds.push(...removed as string[]);
+      pageToken = typeof frame.next_page_token === 'string'
+        ? frame.next_page_token
+        : undefined;
+      if (!pageToken) cursor = typeof frame.cursor === 'string' ? frame.cursor : undefined;
+    } while (pageToken);
+    if (!cursor) {
+      throw new SessionSyncError('invalid_response', 'Host omitted the final session cursor');
+    }
+    return { sessions, removedSessionIds, cursor };
+  }
+
+  /** Retrieve one revision-consistent retained transcript. */
+  async getSession(
+    sessionId: string,
+    options: SessionGetOptions = {},
+  ): Promise<SessionGetResult> {
+    const records: SessionRecord[] = [];
+    let pageToken: string | undefined;
+    let summary: SessionSummary | null = null;
+    let snapshotRevision: number | undefined;
+    do {
+      const frame = await this._requestSessionFrame({
+        type: 'SESSION_GET',
+        session_id: sessionId,
+        ...(pageToken
+          ? { page_token: pageToken }
+          : options.ifRevision !== undefined ? { if_revision: options.ifRevision } : {}),
+        ...(options.limit !== undefined && { limit: options.limit }),
+      }, pageToken
+        ? ['SESSION_SNAPSHOT']
+        : ['SESSION_SNAPSHOT', 'SESSION_NOT_MODIFIED']);
+      if (frame.type === 'SESSION_NOT_MODIFIED') {
+        if (!Number.isSafeInteger(frame.revision) || (frame.revision as number) < 1) {
+          throw new SessionSyncError('invalid_response', 'Host returned an invalid revision');
+        }
+        return { notModified: true, revision: frame.revision as number };
+      }
+      const pageSummary = sessionSummary(frame.summary);
+      const revision = frame.snapshot_revision;
+      const pageRecords = Array.isArray(frame.records)
+        ? frame.records.map(sessionRecord)
+        : [];
+      if (
+        !pageSummary
+        || !Number.isSafeInteger(revision) || (revision as number) < 1
+        || !Array.isArray(frame.records) || pageRecords.some(item => item === null)
+        || (snapshotRevision !== undefined && snapshotRevision !== revision)
+      ) {
+        throw new SessionSyncError('invalid_response', 'Host returned an invalid session snapshot');
+      }
+      summary = pageSummary;
+      snapshotRevision = revision as number;
+      records.push(...pageRecords as SessionRecord[]);
+      pageToken = typeof frame.next_page_token === 'string'
+        ? frame.next_page_token
+        : undefined;
+    } while (pageToken);
+    if (!summary || snapshotRevision === undefined) {
+      throw new SessionSyncError('invalid_response', 'Host returned an empty session snapshot');
+    }
+    return {
+      notModified: false,
+      summary,
+      snapshotRevision,
+      records,
+    } satisfies SessionSnapshot;
+  }
+
+  /** Rename or archive one retained chat using optimistic concurrency. */
+  async updateSession(
+    sessionId: string,
+    patch: SessionMetadataPatch,
+    ifRevision: number,
+  ): Promise<SessionSummary> {
+    const frame = await this._requestSessionFrame({
+      type: 'SESSION_UPDATE',
+      session_id: sessionId,
+      if_revision: ifRevision,
+      patch,
+    }, ['SESSION_UPDATED']);
+    const summary = sessionSummary(frame.summary);
+    if (!summary) {
+      throw new SessionSyncError('invalid_response', 'Host returned an invalid updated session');
+    }
+    return summary;
+  }
+
+  /** Start or replace the connection's lightweight retained-chat watch. */
+  async watchSessions(
+    cursor: string,
+    listener: (changes: SessionChangeSet) => void,
+    includeArchived = false,
+  ): Promise<void> {
+    const previous = this._sessionChangeListener;
+    this._sessionChangeListener = listener;
+    try {
+      await this._requestSessionFrame({
+        type: 'SESSION_WATCH',
+        cursor,
+        include_archived: includeArchived,
+      }, ['SESSION_WATCHED']);
+    } catch (error) {
+      if (this._sessionChangeListener === listener) this._sessionChangeListener = previous;
+      throw error;
+    }
+  }
+
+  /** Stop delivering watch notifications locally; socket close stops Host polling. */
+  stopSessionWatch(listener?: (changes: SessionChangeSet) => void): void {
+    if (!listener || this._sessionChangeListener === listener) {
+      this._sessionChangeListener = null;
     }
   }
 
@@ -509,7 +712,11 @@ export class RemoteAgent {
     this._signer = await ensureSigner(this._signer, this._keys);
     await this._resolveEndpointOnce();
 
-    const payload: Record<string, unknown> = { timestamp: Math.floor(Date.now() / 1000) };
+    const payload: Record<string, unknown> = {
+      timestamp: Math.floor(Date.now() / 1000),
+      extensions: OIP_REQUESTED_EXTENSIONS,
+      ...(this._sessionSyncOnly && { session_sync_only: 1 }),
+    };
     payload.to = this.address;
     const signed = await signPayload(this._signer, payload);
 
@@ -1088,6 +1295,9 @@ export class RemoteAgent {
     this._connectionState = 'disconnected';
     this._error = null;
     this._pendingApproval = null;
+    this._sessionChangeListener = null;
+    this._sessionSyncSupported = false;
+    this._rejectSessionRequests(new Error('Conversation reset during Session Sync request'));
     this._settleInput();
     reject?.(resetError);
     this._settleSessionStatusWaiters('not_found');
@@ -1297,7 +1507,11 @@ export class RemoteAgent {
     ws.onclose = () => this._handleSocketConnectionLoss(ws);
 
     // Send CONNECT with session (conversation history)
-    const payload: Record<string, unknown> = { timestamp: Math.floor(Date.now() / 1000) };
+    const payload: Record<string, unknown> = {
+      timestamp: Math.floor(Date.now() / 1000),
+      extensions: OIP_REQUESTED_EXTENSIONS,
+      ...(this._sessionSyncOnly && { session_sync_only: 1 }),
+    };
     payload.to = this.address;
     const signed = await signPayload(this._signer, payload);
     const connectMsg: Record<string, unknown> = {
@@ -1364,6 +1578,39 @@ export class RemoteAgent {
     // PING/PONG keepalive — PING also covers idle periods with no other traffic.
     if (data?.type === 'PING') {
       this._ws?.send(JSON.stringify({ type: 'PONG' }));
+      return;
+    }
+
+    const sessionRequestId = typeof data?.request_id === 'string'
+      ? data.request_id
+      : undefined;
+    const pendingSessionRequest = sessionRequestId
+      ? this._pendingSessionRequests.get(sessionRequestId)
+      : undefined;
+    if (pendingSessionRequest && data?.type === 'ERROR') {
+      clearTimeout(pendingSessionRequest.timer);
+      this._pendingSessionRequests.delete(sessionRequestId!);
+      pendingSessionRequest.reject(new SessionSyncError(
+        typeof data.code === 'string' ? data.code : 'unknown',
+        String(data.message || 'Session Sync request failed'),
+        data.retryable === true,
+        data.data,
+      ));
+      return;
+    }
+    if (
+      pendingSessionRequest
+      && typeof data?.type === 'string'
+      && pendingSessionRequest.expectedTypes.has(data.type)
+    ) {
+      clearTimeout(pendingSessionRequest.timer);
+      this._pendingSessionRequests.delete(sessionRequestId!);
+      pendingSessionRequest.resolve(data as Record<string, unknown>);
+      return;
+    }
+    if (data?.type === 'SESSION_CHANGED') {
+      const changes = this._sessionChangesFromFrame(data as Record<string, unknown>);
+      if (changes) this._sessionChangeListener?.(changes);
       return;
     }
 
@@ -1461,6 +1708,7 @@ export class RemoteAgent {
         this._rejectUnsupportedProtocol(data.protocol);
         return;
       }
+      this._sessionSyncSupported = supportsSessionSync(data.protocol);
       this._modeState = hostSessionModeState(data);
       if (this._modeState) {
         this._applyServerMode(this._modeState.currentModeId, this._modeState.turnsLeft);
@@ -1845,6 +2093,9 @@ export class RemoteAgent {
     this._settleReconnectReady(connectionError);
     this._ws = null;
     this._authenticated = false;
+    this._sessionSyncSupported = false;
+    this._sessionChangeListener = null;
+    this._rejectSessionRequests(connectionError);
     this._connectionState = 'disconnected';
     this._modeState = null;
     this._stopPingMonitor();
@@ -1910,6 +2161,89 @@ export class RemoteAgent {
 
   private _hasReadyConnection(): boolean {
     return this._authenticated && this._isSocketOpen(this._ws);
+  }
+
+  private async _requestSessionFrame(
+    message: Record<string, unknown>,
+    expectedTypes: string[],
+  ): Promise<Record<string, unknown>> {
+    await this._ensureConnected();
+    if (!this._sessionSyncSupported) {
+      throw new SessionSyncError(
+        'unsupported_extension',
+        'Host does not support OIP session-sync/0.1',
+      );
+    }
+    const requestId = generateUUID();
+    const command = { ...message, request_id: requestId };
+    return new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const pending = this._pendingSessionRequests.get(requestId);
+        if (!pending) return;
+        this._pendingSessionRequests.delete(requestId);
+        pending.reject(new SessionSyncError(
+          'temporarily_unavailable',
+          'Session Sync request timed out',
+          true,
+        ));
+      }, SESSION_SYNC_TIMEOUT_MS);
+      this._pendingSessionRequests.set(requestId, {
+        expectedTypes: new Set(expectedTypes),
+        resolve,
+        reject,
+        timer,
+      });
+      void this._sendSignedSessionCommand(command).catch((cause) => {
+        const pending = this._pendingSessionRequests.get(requestId);
+        if (!pending) return;
+        clearTimeout(pending.timer);
+        this._pendingSessionRequests.delete(requestId);
+        pending.reject(cause instanceof Error ? cause : new Error(String(cause)));
+      });
+    });
+  }
+
+  private async _sendSignedSessionCommand(
+    message: Record<string, unknown>,
+  ): Promise<void> {
+    if (!this._authenticated) throw new Error('Agent connection is not ready');
+    this._signer = await ensureSigner(this._signer, this._keys);
+    const payload = {
+      ...message,
+      to: this.address,
+      timestamp: Math.floor(Date.now() / 1000),
+      nonce: generateUUID(),
+    };
+    const signed = await signPayload(this._signer, payload);
+    this._sendOpen({ ...payload, ...signed });
+  }
+
+  private _sessionChangesFromFrame(
+    frame: Record<string, unknown>,
+  ): SessionChangeSet | null {
+    const sessions = Array.isArray(frame.sessions)
+      ? frame.sessions.map(sessionSummary)
+      : [];
+    const removed = frame.removed_session_ids;
+    if (
+      !Array.isArray(frame.sessions) || sessions.some(item => item === null)
+      || !Array.isArray(removed)
+      || removed.some(item => typeof item !== 'string' || !item)
+      || typeof frame.cursor !== 'string' || !frame.cursor
+    ) return null;
+    return {
+      sessions: sessions as SessionSummary[],
+      removedSessionIds: removed as string[],
+      cursor: frame.cursor,
+    };
+  }
+
+  private _rejectSessionRequests(error: Error): void {
+    for (const pending of this._pendingSessionRequests.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this._pendingSessionRequests.clear();
   }
 
   private _sendAuthenticated(message: Record<string, unknown>): void {
@@ -1984,6 +2318,9 @@ export class RemoteAgent {
     // socket's onclose is detached below, so nothing else would ever settle it, and
     // _ensureConnected would keep handing the stale promise to every later caller.
     this._settleConnect(new Error('Connection closed during authentication'));
+    this._sessionSyncSupported = false;
+    this._sessionChangeListener = null;
+    this._rejectSessionRequests(new Error('Connection closed during Session Sync request'));
     if (this._pendingModeChange) {
       this._rejectModeChange(
         this._pendingModeChange,

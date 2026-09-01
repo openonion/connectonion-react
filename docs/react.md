@@ -276,8 +276,9 @@ const handleSubmit = async (text: string) => {
 The `useAgentForHuman` hook automatically persists session state to `localStorage` via Zustand. This means:
 
 - **Survives browser refresh**: If the user refreshes mid-conversation, the session is restored
-- **Client is source of truth**: Server sends session state with every streaming event, the hook saves it locally
-- **Application controls lifecycle**: The SDK saves sessions, your app decides when to create new ones or clean up old ones
+- **Immediate local rendering**: Cached messages appear without waiting for a network round trip
+- **Host wins for committed history**: On a Session Sync-capable Host, revisions from the authenticated Agent machine are authoritative
+- **Local-only state stays local**: Drafts and unsent outbox work are not invented as committed remote messages
 
 ### How It Works
 
@@ -285,6 +286,29 @@ The `useAgentForHuman` hook automatically persists session state to `localStorag
 2. On every streaming event from the server, the hook syncs `agent.currentSession` to the store
 3. On mount (or page refresh), the hook restores the session from localStorage back to the agent
 4. The agent sends the restored session to the server on the next `input()`, so the server can continue the conversation
+
+For a real cross-device Recent Chat index, use the low-level `RemoteAgent`
+Session Sync API. The Host scopes every result to the CONNECT signer, so two
+devices see the same retained chats only when they use the same browser identity:
+
+```ts
+const agent = connect(address, { signer: identity, sessionSyncOnly: true })
+await agent.connect()
+
+const { sessions, removedSessionIds, cursor } = await agent.syncSessions({
+  cursor: cachedCursor,
+})
+
+const transcript = await agent.getSession(sessions[0].session_id, {
+  ifRevision: cachedRevision,
+})
+```
+
+Persist `cursor` unchanged and merge summaries by `session_id`, keeping the
+larger Host `revision`. Remove IDs listed in `removedSessionIds`. A
+`cursor_expired` error means compaction invalidated the incremental position;
+run one full `syncSessions()` without a cursor. `getSession()` and
+`syncSessions()` automatically drain all protocol pages.
 
 ### Session Lifecycle
 
@@ -311,10 +335,13 @@ const { input, reset } = useAgentForHuman('0x123abc', sessionId);
 
 ### Base RemoteAgent vs React Hook
 
-The base `RemoteAgent` (from `connect()`) keeps session **in memory only**. Only the React hook adds localStorage persistence. This separation means:
+The base `RemoteAgent` (from `connect()`) keeps its cache **in memory only**.
+Only the React hook adds localStorage persistence. Remote Host retention is a
+separate authority exposed by Session Sync:
 
 - **Node.js / non-React**: Session lives in memory, lost on process restart
 - **React (useAgentForHuman)**: Session auto-persists to localStorage
+- **Session Sync-capable Host**: Committed retained history can be discovered from any device using the same identity
 
 ## The Agent's Home Page
 

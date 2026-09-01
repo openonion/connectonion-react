@@ -1,6 +1,6 @@
 {
   "name": "@connectonion/react",
-  "version": "0.4.3",
+  "version": "0.4.4-rc.0",
   "description": "React hooks for ConnectOnion agents — useAgentForHuman, useVoiceInput, browser identity, and the agent connection itself",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

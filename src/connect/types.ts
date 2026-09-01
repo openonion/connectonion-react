@@ -285,6 +285,8 @@ export interface ConnectOptions {
   directUrl?: string;
   /** Custom WebSocket constructor */
   wsCtor?: WebSocketCtor;
+  /** Open an authenticated retained-chat index socket without creating a chat. */
+  sessionSyncOnly?: boolean;
 }
 
 /** Stable OIP plan priority. Kept separate from ConnectOnion's approval mode. */
@@ -311,6 +313,76 @@ export interface SessionState {
   mode?: Mode;
   /** Remaining completed user-driven turns for bounded Full access. */
   turns_left?: number;
+}
+
+export type SessionActivity = 'idle' | 'running' | 'waiting';
+export type SessionOutcome = 'completed' | 'failed' | 'interrupted';
+
+/** Host-authored retained-chat index row. Local storage is only a cache. */
+export interface SessionSummary {
+  session_id: string;
+  revision: number;
+  title: string;
+  activity: SessionActivity;
+  created_at: string;
+  updated_at: string;
+  last_sequence: number;
+  last_outcome?: SessionOutcome;
+  archived_at?: string;
+  expires_at?: string;
+  preview?: string;
+}
+
+export interface SessionRecord {
+  sequence: number;
+  record_id: string;
+  kind: 'input' | 'output' | 'event' | 'request';
+  occurred_at: string;
+  data: ChatItem;
+}
+
+export interface SessionSyncOptions {
+  cursor?: string;
+  includeArchived?: boolean;
+  /** Per-frame page size. The SDK drains every page before resolving. */
+  limit?: number;
+}
+
+export interface SessionSyncResult {
+  sessions: SessionSummary[];
+  removedSessionIds: string[];
+  cursor: string;
+}
+
+export interface SessionGetOptions {
+  ifRevision?: number;
+  /** Per-frame page size. The SDK drains every page before resolving. */
+  limit?: number;
+}
+
+export interface SessionSnapshot {
+  notModified: false;
+  summary: SessionSummary;
+  snapshotRevision: number;
+  records: SessionRecord[];
+}
+
+export interface SessionNotModified {
+  notModified: true;
+  revision: number;
+}
+
+export type SessionGetResult = SessionSnapshot | SessionNotModified;
+
+export interface SessionMetadataPatch {
+  title?: string;
+  archived?: boolean;
+}
+
+export interface SessionChangeSet {
+  sessions: SessionSummary[];
+  removedSessionIds: string[];
+  cursor: string;
 }
 
 /** The complete ConnectOnion 1.7 public mode vocabulary. */
