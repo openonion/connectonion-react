@@ -714,6 +714,7 @@ export class RemoteAgent {
 
     const payload: Record<string, unknown> = {
       timestamp: Math.floor(Date.now() / 1000),
+      nonce: generateUUID(),
       extensions: OIP_REQUESTED_EXTENSIONS,
       ...(this._sessionSyncOnly && { session_sync_only: 1 }),
     };
@@ -1509,6 +1510,7 @@ export class RemoteAgent {
     // Send CONNECT with session (conversation history)
     const payload: Record<string, unknown> = {
       timestamp: Math.floor(Date.now() / 1000),
+      nonce: generateUUID(),
       extensions: OIP_REQUESTED_EXTENSIONS,
       ...(this._sessionSyncOnly && { session_sync_only: 1 }),
     };

@@ -125,6 +125,43 @@ describe('RemoteAgent reconnect races', () => {
     void reconnecting;
   });
 
+  test('parallel session-index CONNECT payloads are unique within one second', async () => {
+    const firstAgent = remoteAgent();
+    const secondAgent = remoteAgent();
+    firstAgent._sessionSyncOnly = true;
+    secondAgent._sessionSyncOnly = true;
+    firstAgent._currentSession = null;
+    secondAgent._currentSession = null;
+
+    const firstConnect = firstAgent.connect();
+    const secondConnect = secondAgent.connect();
+    await settleSigner();
+
+    const [firstSocket, secondSocket] = FakeSocket.instances as any[];
+    firstSocket.readyState = 1;
+    secondSocket.readyState = 1;
+    firstSocket.onopen?.({});
+    secondSocket.onopen?.({});
+    await settleSigner();
+
+    const firstFrame = JSON.parse(firstSocket.sent[0]);
+    const secondFrame = JSON.parse(secondSocket.sent[0]);
+    expect(firstFrame.payload.timestamp).toBe(secondFrame.payload.timestamp);
+    expect(firstFrame.payload.to).toBe(secondFrame.payload.to);
+    expect(firstFrame.payload.session_sync_only).toBe(1);
+    expect(firstFrame.payload.nonce).toEqual(expect.any(String));
+    expect(secondFrame.payload.nonce).toEqual(expect.any(String));
+    expect(firstFrame.payload.nonce).not.toBe(secondFrame.payload.nonce);
+
+    firstSocket.onmessage?.({
+      data: JSON.stringify({ type: 'CONNECTED', status: 'index' }),
+    });
+    secondSocket.onmessage?.({
+      data: JSON.stringify({ type: 'CONNECTED', status: 'index' }),
+    });
+    await Promise.all([firstConnect, secondConnect]);
+  });
+
   test('an input rejected before Host auth reconnects and is sent exactly once', async () => {
     const agent = remoteAgent();
     const staleSocket = new FakeSocket();
