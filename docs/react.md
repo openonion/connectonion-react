@@ -304,6 +304,11 @@ const transcript = await agent.getSession(sessions[0].session_id, {
 })
 ```
 
+The SDK signs a fresh nonce into each CONNECT, including reconnect and the
+index-only connection. This matters when the same identity opens two pages in
+one second: Ed25519 is deterministic, while the Host correctly rejects an
+actually reused CONNECT signature as a replay.
+
 Persist `cursor` unchanged and merge summaries by `session_id`, keeping the
 larger Host `revision`. Remove IDs listed in `removedSessionIds`. A
 `cursor_expired` error means compaction invalidated the incremental position;

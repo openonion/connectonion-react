@@ -89,6 +89,8 @@ await agent.updateSession(index.sessions[0].session_id, { archived: true }, 7)
 For a sidebar/index worker, construct `RemoteAgent` with
 `{ sessionSyncOnly: true }`. That CONNECT authenticates and negotiates the
 extension without creating an empty conversation on Host.
+Every CONNECT includes a fresh signed nonce, so simultaneous pages from the
+same identity remain distinct under Host replay protection.
 
 `syncSessions()` and `getSession()` drain protocol pagination before resolving.
 Opaque cursors and Host revisions must be persisted unchanged. All Session Sync
