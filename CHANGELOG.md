@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.4-rc.2 — 2026-09-07
+
+### Added
+
+- Connect a hosted Control Center to its parent chat through scoped browser
+  ports, ordered snapshots, revision checks, bounded requests and cancellation.
+- Expose signed source, diff, review, update, settings and rollback commands to
+  the authenticated parent session; keep ordinary chat frames compatible with
+  existing Hosts.
+- Package the browser module at `@connectonion/react/control-center/browser`
+  for apps that do not use React.
+
+### Validation and release boundary
+
+- 169 SDK tests and the paired O Chat production browser suite pass against the
+  packed candidate. O Chat must pin the published package and repeat normal CI
+  and live Host acceptance before stable promotion.
+- Publish the exact CI-built artifact through the protected tag workflow under
+  the npm `rc` dist-tag. This candidate supports ConnectOnion 1.8.4.
+
 ## 0.4.4-rc.1 — 2026-09-02
 
 ### Fixed
