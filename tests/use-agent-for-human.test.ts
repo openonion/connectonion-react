@@ -101,6 +101,28 @@ class PlanWebSocket extends MockWebSocket {
   }
 }
 
+class ControlCenterWebSocket extends MockWebSocket {
+  send(data: unknown): void {
+    const msg = JSON.parse(String(data));
+    super.send(data);
+    if (msg.type !== 'CONNECT') return;
+    setTimeout(() => this.onmessage?.({
+      data: JSON.stringify({
+        type: 'CONTROL_CENTER_APP',
+        session_id: msg.session_id,
+        app: {
+          schema: 'connectonion.control-app/1',
+          revision: `sha256:${'a'.repeat(64)}`,
+          url: 'https://apps.openonion.ai/agent/revision/index.html',
+          sdk_version: '1',
+          review: { status: 'approved', review_id: 'review-1' },
+          capabilities: ['clipboard-write', 'fullscreen'],
+        },
+      }),
+    }), 10);
+  }
+}
+
 // Swappable WebSocket class — tests can override for error scenarios
 let ActiveWS: any = MockWebSocket;
 let sentFrames: Array<Record<string, unknown>> = [];
@@ -229,6 +251,27 @@ describe('useAgentForHuman hook', () => {
       expect(Object.values(mockStorage).some(
         (value) => value.includes('Render the plan'),
       )).toBe(true);
+    });
+
+    it('exposes the authenticated Control Center app independently from dashboard HTML', async () => {
+      ActiveWS = ControlCenterWebSocket;
+      const addr = uniqueAddr();
+      const { result } = renderHook(() =>
+        useAgentForHuman(addr, 'control-center-session')
+      );
+
+      expect(result.current.controlCenterApp).toBeNull();
+      await act(async () => {
+        result.current.connect();
+        await flush();
+      });
+
+      expect(result.current.dashboardHtml).toBeNull();
+      expect(result.current.controlCenterApp).toMatchObject({
+        schema: 'connectonion.control-app/1',
+        revision: `sha256:${'a'.repeat(64)}`,
+        review: { status: 'approved' },
+      });
     });
   });
 

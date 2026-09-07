@@ -235,6 +235,39 @@ export interface AgentAcceptedInputs {
   files?: { max_file_size_mb: number; max_files_per_request: number };
 }
 
+export type ControlCenterCapability =
+  | 'camera'
+  | 'microphone'
+  | 'geolocation'
+  | 'clipboard-read'
+  | 'clipboard-write'
+  | 'fullscreen';
+
+/** Immutable, review-gated Web app published by the authenticated Agent Host. */
+export interface ControlCenterAppDescriptor {
+  schema: 'connectonion.control-app/1';
+  revision: string;
+  url: string;
+  entry?: string;
+  sdk_version: '1';
+  review: {
+    status: 'reviewing' | 'approved' | 'blocked';
+    review_id?: string;
+    reviewed_at?: string;
+  };
+  capabilities?: ControlCenterCapability[];
+}
+
+export type ControlCenterCommand = 'state' | 'update' | 'configure' | 'source' | 'diff' | 'rollback';
+export interface ControlCenterState {
+  schema: 1;
+  status: 'empty' | 'reviewing' | 'approved' | 'blocked' | 'unavailable';
+  active: ControlCenterAppDescriptor | null;
+  history: Array<Record<string, unknown>>;
+  updates: Record<string, unknown>;
+  error?: {code: string; message: string} | null;
+}
+
 export interface AgentInfo {
   address: string;
   name?: string;

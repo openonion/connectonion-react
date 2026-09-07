@@ -8,6 +8,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AgentInfo,
+  ControlCenterAppDescriptor,
+  ControlCenterState,
+  ControlCenterCommand,
   ChatItem,
   PlanEntry,
   AgentStatus,
@@ -67,6 +70,11 @@ export interface UseAgentForHumanReturn {
    */
   dashboardHtml: string | null;
 
+  /** Latest authenticated, immutable full-Web Control Center descriptor. */
+  controlCenterApp: ControlCenterAppDescriptor | null;
+  controlCenterState: ControlCenterState | null;
+  controlCenterCommand: (action: ControlCenterCommand, payload?: Record<string, unknown>) => Promise<Record<string, unknown>>;
+
   /**
    * The agent's full self-description — name, model, tools, every skill, balance —
    * pushed by the Host once the connection is authenticated. `null` until then, which
@@ -107,6 +115,7 @@ export interface UseAgentForHumanReturn {
    * @param options.images - Base64-encoded images to attach to the message
    * @param options.files - File attachments with name, type, size, and dataUrl
    */
+  inputFromControlCenter: (prompt: string, signal?: AbortSignal) => Promise<void>;
   input: (prompt: string, options?: { images?: string[]; files?: import('./connect').FileAttachment[] }) => void;
 
   /** Retry the last turn without appending a duplicate user transcript item. */
@@ -235,6 +244,11 @@ export function useAgentForHuman(
   // Latest dashboard.html snapshot the Host pushed over this connection.
   const [dashboardHtml, setDashboardHtml] = useState<string | null>(agent.dashboardHtml);
 
+  const [controlCenterApp, setControlCenterApp] = useState<ControlCenterAppDescriptor | null>(
+    agent.controlCenterApp,
+  );
+  const [controlCenterState, setControlCenterState] = useState<ControlCenterState | null>(agent.controlCenterState);
+
   // Authenticated agent profile — arrives right after CONNECTED, so a cached agent
   // already holds it and a cold one fills it in on the next flush.
   const [profile, setProfile] = useState<AgentInfo | null>(agent.profile);
@@ -262,6 +276,8 @@ export function useAgentForHuman(
       setStatus(agent.status);
       setConnectionState(agent.connectionState);
       setDashboardHtml(agent.dashboardHtml);
+      setControlCenterApp(agent.controlCenterApp);
+      setControlCenterState(agent.controlCenterState);
       setProfile(agent.profile);
       setAvailableModes([...agent.availableModes]);
       setModeChangePending(agent.modeChangePending);
@@ -343,7 +359,7 @@ export function useAgentForHuman(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
-  const input = (prompt: string, options?: { images?: string[]; files?: import('./connect').FileAttachment[] }) => {
+  const prepareInput = () => {
     setError(null);
 
     // Preserve current agent state while ensuring the server receives the
@@ -363,6 +379,15 @@ export function useAgentForHuman(
       (agent as any)._chatItems = [...ui];
     }
 
+  };
+
+  const inputFromControlCenter = async (prompt: string, signal?: AbortSignal) => {
+    prepareInput();
+    await agent.inputFromControlCenter(prompt, signal);
+  };
+
+  const input = (prompt: string, options?: { images?: string[]; files?: import('./connect').FileAttachment[] }) => {
+    prepareInput();
     // Non-blocking — updates come via onMessage. A failed input already
     // surfaced through agent.error in the onMessage flush; the rejection
     // here is the same error, caught to avoid an unhandled rejection.
@@ -449,6 +474,9 @@ export function useAgentForHuman(
     isProcessing: status !== 'idle',
     error,
     dashboardHtml,
+    controlCenterApp,
+    controlCenterState,
+    controlCenterCommand: (action, payload) => agent.controlCenterCommand(action, payload),
     profile,
     checkSessionStatus: (sid: string) => agent.checkSessionStatus(sid),
     mode: session?.mode || 'auto',
@@ -456,6 +484,7 @@ export function useAgentForHuman(
     availableModes,
     modeChangePending,
     input,
+    inputFromControlCenter,
     retry,
     connect,
     sendMessage,

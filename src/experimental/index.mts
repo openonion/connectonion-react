@@ -5,6 +5,10 @@
 // statically discover them through `export *` alone.
 export {
   connect,
+  createControlCenterHost,
+  createControlCenterClient,
+  connectControlCenter,
+  boundControlSnapshot,
   RemoteAgent,
   SessionSyncError,
   OIP_PROTOCOL,

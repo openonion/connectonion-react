@@ -45,7 +45,7 @@
  */
 import * as address from '../address';
 import {
-  AgentInfo, AgentStatus, ChatItem, ChatItemType, ConnectionState,
+  AgentInfo, AgentStatus, ChatItem, ChatItemType, ConnectionState, ControlCenterAppDescriptor, ControlCenterState, ControlCenterCommand,
   ConnectOptions, Mode, PlanEntry, ProviderApprovalPresentation, ProviderInputAcknowledgement, ProviderInterruptAcknowledgement, ProviderPermissionAcknowledgement, RemoteSessionStatus, ResolvedEndpoint, Response, SessionChangeSet, SessionGetOptions, SessionGetResult, SessionMetadataPatch, SessionRecord, SessionSnapshot, SessionState, SessionSummary, SessionSyncOptions, SessionSyncResult, WebSocketCtor, WebSocketLike,
 } from './types';
 import {
@@ -68,6 +68,25 @@ import {
   hostSessionModeState,
   normalizePlanEntries,
 } from './wire-events';
+
+const CONTROL_CENTER_CAPABILITIES = new Set([
+  'camera', 'microphone', 'geolocation', 'clipboard-read', 'clipboard-write', 'fullscreen',
+]);
+
+function isControlCenterAppDescriptor(value: unknown): value is ControlCenterAppDescriptor {
+  if (!value || typeof value !== 'object') return false;
+  const app = value as Partial<ControlCenterAppDescriptor>;
+  return app.schema === 'connectonion.control-app/1'
+    && typeof app.revision === 'string'
+    && /^sha256:[a-f0-9]{64}$/.test(app.revision)
+    && typeof app.url === 'string'
+    && app.sdk_version === '1'
+    && Boolean(app.review && ['reviewing', 'approved', 'blocked'].includes(app.review.status))
+    && (app.capabilities === undefined || (
+      Array.isArray(app.capabilities)
+      && app.capabilities.every(capability => CONTROL_CENTER_CAPABILITIES.has(capability))
+    ));
+}
 
 interface PendingApproval {
   chatItemId: string;
@@ -332,6 +351,11 @@ export class RemoteAgent {
   // Latest dashboard.html snapshot pushed by the Host (on connect + after each run).
   _dashboardHtml: string | null = null;
 
+  // Kept separate from legacy dashboard HTML so markup cannot opt itself into
+  // executable iframe mode. Only the authenticated Host can publish this frame.
+  _controlCenterApp: ControlCenterAppDescriptor | null = null;
+  _controlCenterState: ControlCenterState | null = null;
+
   // The agent's own account of itself, pushed once right after CONNECTED.
   // This is the *authenticated* answer: /info and the relay directory are open to
   // anyone who can reach the agent, so they publish a filtered subset (project-tree
@@ -416,6 +440,17 @@ export class RemoteAgent {
   get modeChangePending(): boolean { return this._pendingModeChange !== null; }
   get error(): Error | null { return this._error || null; }
   get dashboardHtml(): string | null { return this._dashboardHtml; }
+  get controlCenterApp(): ControlCenterAppDescriptor | null { return this._controlCenterApp; }
+  get controlCenterState(): ControlCenterState | null { return this._controlCenterState; }
+
+  async controlCenterCommand(action: ControlCenterCommand, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    const response = await this._requestSessionFrame({type:'CONTROL_CENTER_COMMAND', action, payload}, ['CONTROL_CENTER_RESULT']);
+    if (response.ok !== true) {
+      const error = response.error as {message?: string} | undefined;
+      throw new Error(error?.message || 'Control Center command was rejected');
+    }
+    return response.result as Record<string, unknown>;
+  }
   get profile(): AgentInfo | null { return this._profile; }
   get sessionSyncSupported(): boolean { return this._sessionSyncSupported; }
 
@@ -586,11 +621,19 @@ export class RemoteAgent {
     }
   }
 
+  /** An app owns only the idle turn it starts; cancellation cannot stop other work. */
+  async inputFromControlCenter(prompt: string, signal?: AbortSignal): Promise<Response> {
+    if (this._status !== 'idle') throw new Error('Agent is busy; wait for the current turn');
+    if (signal?.aborted) throw new Error('Control Center action cancelled');
+    return this.input(prompt, {signal});
+  }
+
   async input(prompt: string, options?: {
     images?: string[];
     files?: import('./types').FileAttachment[];
     /** Re-run the last user turn without duplicating its transcript item. */
     retry?: boolean;
+    signal?: AbortSignal;
   }): Promise<Response> {
     const connectionEpoch = this._connectionEpoch;
     const lastUser = [...this._chatItems].reverse().find((item) => item.type === 'user');
@@ -610,6 +653,7 @@ export class RemoteAgent {
 
     try {
       await this._ensureConnected();
+      if (options?.signal?.aborted) throw new Error('Control Center action cancelled');
     } catch (err) {
       if (connectionEpoch !== this._connectionEpoch) throw err;
       // Restore the status machine before rethrowing: fire-and-forget callers
@@ -658,10 +702,14 @@ export class RemoteAgent {
     // No overall deadline: interactive runs legitimately pend for as long as
     // ask_user waits on the human. Dead connections are detected by the ping
     // monitor (60s silence -> close -> _handleConnectionLoss rejects).
-    return new Promise<Response>((resolve, reject) => {
+    const abort = () => this.interrupt();
+    const result = new Promise<Response>((resolve, reject) => {
       this._inputResolve = resolve;
       this._inputReject = reject;
     });
+    options?.signal?.addEventListener('abort', abort, {once:true});
+    if (options?.signal?.aborted) abort();
+    return result.finally(() => options?.signal?.removeEventListener('abort', abort));
   }
 
   reconnect(sessionId?: string): Promise<Response> {
@@ -1291,6 +1339,8 @@ export class RemoteAgent {
     this._settleReconnectReady(resetError);
     this._closeWs();
     this._currentSession = null;
+    this._controlCenterState = null;
+    this._controlCenterApp = null;
     this._chatItems = [];
     this._status = 'idle';
     this._connectionState = 'disconnected';
@@ -1945,6 +1995,29 @@ export class RemoteAgent {
     // would blank an already-rendered dashboard on one bad push.
     if (data?.type === 'DASHBOARD_SNAPSHOT' && typeof data.html === 'string') {
       this._dashboardHtml = data.html;
+    }
+
+    if (data?.type === 'CONTROL_CENTER_STATE' && this._authenticated
+        && data.session_id === this._currentSession?.session_id) {
+      const state = data.state;
+      if (state && state.schema === 1 && ['empty','reviewing','approved','blocked','unavailable'].includes(state.status)
+          && Array.isArray(state.history) && state.history.length <= 100
+          && state.updates && typeof state.updates === 'object'
+          && (state.active === null || isControlCenterAppDescriptor(state.active))
+          && JSON.stringify(state).length <= 2 * 1024 * 1024) {
+        this._controlCenterState = JSON.parse(JSON.stringify(state));
+        this._controlCenterApp = this._controlCenterState!.active;
+      }
+    }
+
+    // A malformed descriptor does not clear the last valid approved revision.
+    if (data?.type === 'CONTROL_CENTER_APP' && this._authenticated
+        && data.session_id === this._currentSession?.session_id && isControlCenterAppDescriptor(data.app)) {
+      this._controlCenterApp = {
+        ...data.app,
+        review: { ...data.app.review },
+        ...(data.app.capabilities ? { capabilities: [...data.app.capabilities] } : {}),
+      };
     }
 
     // OUTPUT — resolve input() promise
