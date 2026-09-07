@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.4-rc.1 — 2026-09-02
+
+### Fixed
+
+- Sign a fresh nonce into every initial and reconnecting OIP CONNECT so two
+  pages opened by the same identity within one timestamp second cannot produce
+  the same deterministic signature and be rejected as a replay.
+- Cover the exact parallel `sessionSyncOnly` connection shape used by two
+  Recent Chat indexes against one relayed Agent.
+
+### Release boundary
+
+- This pairs with ConnectOnion `1.8.0a6`, which distinguishes relay socket
+  routing metadata from chat-resume state on the index-only connection.
+- Publish through the protected tag workflow under the npm `rc` dist-tag.
+- O Chat must pin this exact package and pass a real two-browser,
+  same-identity, hosted-agent synchronization gate before production.
+
 ## 0.4.2-rc.0 — 2026-08-23
 
 ### Added

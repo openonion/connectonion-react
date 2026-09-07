@@ -6,6 +6,12 @@ export const OIP_PROTOCOL = Object.freeze({
   max_version: '0.1',
 });
 
+export const SESSION_SYNC_EXTENSION = 'session-sync';
+export const SESSION_SYNC_VERSION = '0.1';
+export const OIP_REQUESTED_EXTENSIONS = Object.freeze({
+  [SESSION_SYNC_EXTENSION]: Object.freeze([SESSION_SYNC_VERSION]),
+});
+
 export class OipCompatibilityError extends Error {
   readonly code = 'OIP_UNSUPPORTED_VERSION';
   readonly retryable = false;
@@ -26,4 +32,13 @@ export function supportsOip(value: unknown): boolean {
   const descriptor = value as { name?: unknown; version?: unknown };
   return descriptor.name === OIP_PROTOCOL.name
     && descriptor.version === OIP_PROTOCOL.version;
+}
+
+/** CONNECTED explicitly selects extensions; absence means a legacy Host. */
+export function supportsSessionSync(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const extensions = (value as { extensions?: unknown }).extensions;
+  if (typeof extensions !== 'object' || extensions === null) return false;
+  return (extensions as Record<string, unknown>)[SESSION_SYNC_EXTENSION]
+    === SESSION_SYNC_VERSION;
 }

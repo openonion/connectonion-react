@@ -4,6 +4,15 @@
 // CommonJS barrel below, but browser bundlers such as Vite/Rolldown cannot
 // statically discover them through `export *` alone.
 export {
+  connect,
+  RemoteAgent,
+  SessionSyncError,
+  OIP_PROTOCOL,
+  OIP_REQUESTED_EXTENSIONS,
+  SESSION_SYNC_EXTENSION,
+  SESSION_SYNC_VERSION,
+  supportsOip,
+  supportsSessionSync,
   fetchAgentInfo,
   useAgentForHuman,
   isChatItemType,
