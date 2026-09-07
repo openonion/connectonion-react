@@ -150,3 +150,38 @@ npm run build
 Releases are created only by the protected GitHub tag workflow. A tag must match
 `package.json` and point at the current reviewed `main` commit; npm publishing
 uses Trusted Publishing with provenance.
+
+### Control Center browser bridge
+
+A reviewed static app uses the existing parent SDK connection. It does not create
+an Agent connection or receive browser keys. Framework bundles can import
+`connectControlCenter` from `@connectonion/react/control-center/browser`; vanilla
+apps can copy the built browser entry point and its license into their output.
+
+```ts
+const client = await connectControlCenter({parentOrigin, revision});
+client.subscribe(({chatItems, status, connectionState, truncated}) => {
+  // Render the parent's normalized conversation and connection state.
+});
+await client.sendMessage('Explain this invoice');
+await client.runSkill('generate-invoice', 'invoice 1042', {signal});
+```
+
+The O Chat shell supplies `parentOrigin` and `revision` in the app URL fragment,
+verifies the iframe's origin/window and transfers one MessagePort per load. A fresh
+epoch scopes ordered snapshots and correlated actions; gaps request a new snapshot.
+`boundControlSnapshot` preserves recent complete ChatItems within a byte limit and
+marks omitted history. Actions default to the current conversation; only an explicit
+`conversation: 'new'` requests another one. Requests accept AbortSignal and bounded
+timeouts. Cancellation/disposal reaches only a pending owned action. Current-chat
+turns must start while the Agent is idle and await completion; new-chat navigation
+acknowledges the handoff. A bare static URL has no implicit identity/session.
+
+The parent uses `createControlCenterHost` with its normalized snapshot and callbacks,
+then calls `publish` as its SDK state changes. `useAgentForHuman` exposes
+`controlCenterState`, `controlCenterCommand`, and `inputFromControlCenter`. The latter
+refuses busy Agents and supports cancellation before/after dispatch. Control commands
+(state/update/configure/source/diff/rollback) use signed, correlated frames over the
+existing direct or Relay transport; author operations require Host administrator
+access. Reset clears review/active state. `allowLocalhost: true` is an explicit
+local-development option for an HTTP loopback parent; production requires HTTPS.

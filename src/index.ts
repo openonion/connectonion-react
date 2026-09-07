@@ -19,6 +19,8 @@ export type {
   AgentAcceptedInputs,
   AgentOnboard,
   ControlCenterAppDescriptor,
+  ControlCenterState,
+  ControlCenterCommand,
   ControlCenterCapability,
   SkillInfo,
   Mode,
@@ -41,6 +43,9 @@ export type {
   HostSessionModeState,
   ApprovalRejectMode,
 } from './connect';
+
+export {connectControlCenter, createControlCenterHost, boundControlSnapshot, createControlCenterClient, CONTROL_CENTER_BRIDGE_VERSION} from './control-center';
+export type {ControlPort, ControlSnapshot, ControlHostOptions, ControlActionContext, ControlActionResult, ControlRequestOptions} from './control-center';
 
 export {
   connect,

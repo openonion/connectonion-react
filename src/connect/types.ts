@@ -258,6 +258,16 @@ export interface ControlCenterAppDescriptor {
   capabilities?: ControlCenterCapability[];
 }
 
+export type ControlCenterCommand = 'state' | 'update' | 'configure' | 'source' | 'diff' | 'rollback';
+export interface ControlCenterState {
+  schema: 1;
+  status: 'empty' | 'reviewing' | 'approved' | 'blocked' | 'unavailable';
+  active: ControlCenterAppDescriptor | null;
+  history: Array<Record<string, unknown>>;
+  updates: Record<string, unknown>;
+  error?: {code: string; message: string} | null;
+}
+
 export interface AgentInfo {
   address: string;
   name?: string;

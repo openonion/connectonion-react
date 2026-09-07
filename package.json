@@ -1,7 +1,7 @@
 {
   "name": "@connectonion/react",
   "version": "0.4.4-rc.1",
-  "description": "React hooks for ConnectOnion agents — useAgentForHuman, useVoiceInput, browser identity, and the agent connection itself",
+  "description": "React hooks for ConnectOnion agents \u2014 useAgentForHuman, useVoiceInput, browser identity, and the agent connection itself",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -23,15 +23,20 @@
       "types": "./dist/transcribe.d.ts",
       "default": "./dist/transcribe.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./control-center/browser": {
+      "types": "./browser/control-center.d.ts",
+      "import": "./browser/control-center.js"
+    }
   },
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "browser"
   ],
   "scripts": {
-    "build": "npm run build:compile",
+    "build": "npm run build:compile && tsc -p tsconfig.browser.json",
     "build:compile": "tsc && tsc -p tsconfig.experimental.json",
     "pretest": "npm run build:compile",
     "test": "jest",
