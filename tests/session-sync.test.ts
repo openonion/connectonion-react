@@ -45,6 +45,17 @@ function readyAgent() {
 }
 
 describe('OIP Session Sync', () => {
+  test('Wiki read is signed, correlated, and returns only the requested HTML', async () => {
+    const { agent, deliver, nextFrame } = readyAgent();
+    const result = agent.wikiRead();
+    const request = await nextFrame();
+    expect(request.payload.type).toBe('WIKI_READ');
+    expect(request.signature).toBe('signed');
+    deliver({type:'WIKI_RESULT',request_id:'another-request',ok:true,html:'wrong'});
+    deliver({type:'WIKI_RESULT',request_id:request.request_id,ok:true,html:'<html>Wiki</html>'});
+    await expect(result).resolves.toBe('<html>Wiki</html>');
+  });
+
   test('CONNECTED explicitly selects the extension', () => {
     const { agent, deliver } = readyAgent();
     agent._sessionSyncSupported = false;

@@ -348,6 +348,18 @@ separate authority exposed by Session Sync:
 - **React (useAgentForHuman)**: Session auto-persists to localStorage
 - **Session Sync-capable Host**: Committed retained history can be discovered from any device using the same identity
 
+## Private Wiki reader
+
+`wikiRead()` sends a signed `WIKI_READ` request over the authenticated Agent
+session and returns the Host's current self-contained HTML reader. A Host without
+a configured Wiki, or a client that is not its owner, rejects the request. Render
+the HTML in an opaque-origin iframe; never inject it into the parent document.
+
+```tsx
+const { wikiRead } = useAgentForHuman(address, sessionId);
+const html = await wikiRead();
+```
+
 ## The Agent's Home Page
 
 An agent can publish a Home page — a `dashboard.html` in its project root — which the

@@ -74,6 +74,7 @@ export interface UseAgentForHumanReturn {
   controlCenterApp: ControlCenterAppDescriptor | null;
   controlCenterState: ControlCenterState | null;
   controlCenterCommand: (action: ControlCenterCommand, payload?: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  wikiRead: () => Promise<string>;
 
   /**
    * The agent's full self-description — name, model, tools, every skill, balance —
@@ -435,6 +436,7 @@ export function useAgentForHuman(
     // caught here only to avoid an unhandled rejection on this fire-and-forget call.
     agent.connect().catch(() => {});
   }, [agent, sessionId]);
+  const wikiRead = useCallback(() => agent.wikiRead(), [agent]);
 
   const reset = () => {
     agent.reset();          // closes this session's WebSocket + clears agent state
@@ -477,6 +479,7 @@ export function useAgentForHuman(
     controlCenterApp,
     controlCenterState,
     controlCenterCommand: (action, payload) => agent.controlCenterCommand(action, payload),
+    wikiRead,
     profile,
     checkSessionStatus: (sid: string) => agent.checkSessionStatus(sid),
     mode: session?.mode || 'auto',
