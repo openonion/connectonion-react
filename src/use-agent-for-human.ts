@@ -151,6 +151,8 @@ export interface UseAgentForHumanReturn {
   interruptProvider: (invocationId: string) => Promise<import('./connect').ProviderInterruptAcknowledgement>;
   /** Send text directly to an owned native Codex Work Room. */
   sendProviderInput: (invocationId: string, text: string) => Promise<import('./connect').ProviderInputAcknowledgement>;
+  attachProviderStation: (pairingCode: string) => Promise<string>;
+  controlProviderStation: (sessionId: string, action: 'take' | 'release', stateRevision: number) => Promise<number>;
   /** Change the provider-native profile only after a revision-bound Host acknowledgement. */
   setProviderPermission: (
     invocationId: string,
@@ -458,6 +460,9 @@ export function useAgentForHuman(
   const interrupt = () => agent.interrupt();
   const interruptProvider = (invocationId: string) => agent.interruptProvider(invocationId);
   const sendProviderInput = (invocationId: string, text: string) => agent.sendProviderInput(invocationId, text);
+  const attachProviderStation = (pairingCode: string) => agent.attachProviderStation(pairingCode);
+  const controlProviderStation = (sessionId: string, action: 'take' | 'release', stateRevision: number) =>
+    agent.controlProviderStation(sessionId, action, stateRevision);
   const setProviderPermission = (invocationId: string, optionId: string, confirmRisk = false) =>
     agent.setProviderPermission(invocationId, optionId, confirmRisk);
 
@@ -495,6 +500,8 @@ export function useAgentForHuman(
     interrupt,
     interruptProvider,
     sendProviderInput,
+    attachProviderStation,
+    controlProviderStation,
     setProviderPermission,
     signOnboard: (options: { inviteCode?: string; payment?: number }) => agent.signOnboard(options),
     setSessionMode,

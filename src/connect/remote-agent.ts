@@ -1023,6 +1023,34 @@ export class RemoteAgent {
     });
   }
 
+  /** Claim the terminal's one Work Room after the browser has onboarded. */
+  async attachProviderStation(pairingCode: string): Promise<string> {
+    if (!pairingCode || pairingCode.length > 128) throw new Error('Enter the pairing code shown by co claude.');
+    const frame = await this._requestSessionFrame(
+      { type: 'PROVIDER_STATION_ATTACH', pairingCode },
+      ['PROVIDER_STATION_ATTACH_ACK'],
+    );
+    if (frame.accepted !== true || typeof frame.sessionId !== 'string') {
+      throw new Error('The Claude terminal did not accept this pairing code.');
+    }
+    return frame.sessionId;
+  }
+
+  /** Transfer one revision of Claude ownership between terminal and browser. */
+  async controlProviderStation(
+    sessionId: string, action: 'take' | 'release', stateRevision: number,
+  ): Promise<number> {
+    if (!sessionId || !providerStateRevision(stateRevision)) throw new Error('The Claude Work Room needs a fresh state.');
+    const frame = await this._requestSessionFrame(
+      { type: 'PROVIDER_CONTROL', sessionId, action, stateRevision },
+      ['PROVIDER_CONTROL_ACK'],
+    );
+    if (frame.accepted !== true || !providerStateRevision(frame.stateRevision)) {
+      throw new Error('Claude changed state before control could transfer. Refresh and try again.');
+    }
+    return frame.stateRevision;
+  }
+
   /** Commit one provider-native profile for subsequent work after Host acknowledgement. */
   setProviderPermission(
     invocationId: string,
@@ -1894,7 +1922,7 @@ export class RemoteAgent {
         data?.type === 'tool_call' || data?.type === 'tool_result' ||
         data?.type === 'tool_call_update' || data?.type === 'provider_invocation' ||
         data?.type === 'provider_activity' || data?.type === 'provider_artifact' ||
-        data?.type === 'provider_message' ||
+        data?.type === 'provider_message' || data?.type === 'provider_session' ||
         data?.type === 'thinking' || data?.type === 'assistant' ||
         data?.type === 'agent_image' ||
         data?.type === 'intent' || data?.type === 'eval' || data?.type === 'compact' ||

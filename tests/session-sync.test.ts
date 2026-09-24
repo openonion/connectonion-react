@@ -45,6 +45,27 @@ function readyAgent() {
 }
 
 describe('OIP Session Sync', () => {
+  test('Claude Station pairing and control use signed, correlated commands', async () => {
+    const { agent, deliver, nextFrame } = readyAgent();
+    const attaching = agent.attachProviderStation('private-pairing-code');
+    const attach = await nextFrame();
+    expect(attach.payload).toMatchObject({
+      type: 'PROVIDER_STATION_ATTACH', pairingCode: 'private-pairing-code',
+    });
+    expect(attach.signature).toBe('signed');
+    deliver({ type: 'PROVIDER_STATION_ATTACH_ACK', request_id: attach.request_id,
+      accepted: true, sessionId: 'owned-session' });
+    await expect(attaching).resolves.toBe('owned-session');
+
+    const taking = agent.controlProviderStation('owned-session', 'take', 4);
+    const control = await nextFrame(1);
+    expect(control.payload).toMatchObject({
+      type: 'PROVIDER_CONTROL', sessionId: 'owned-session', action: 'take', stateRevision: 4,
+    });
+    deliver({ type: 'PROVIDER_CONTROL_ACK', request_id: control.request_id,
+      accepted: true, stateRevision: 5 });
+    await expect(taking).resolves.toBe(5);
+  });
   test('Wiki read is signed, correlated, and returns only the requested HTML', async () => {
     const { agent, deliver, nextFrame } = readyAgent();
     const result = agent.wikiRead();

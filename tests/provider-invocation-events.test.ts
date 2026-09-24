@@ -62,6 +62,20 @@ test('preserves a bounded provider-native permission catalog at the exact lifecy
   expect(malformed.providerPermission).toBeUndefined();
 });
 
+test('Claude Station control follows only newer typed owner events', () => {
+  const items: ChatItem[] = [];
+  apply(items, { type: 'provider_invocation', invocationId: 'claude_code:station',
+    parentToolCallId: 'station', provider: 'claude_code', status: 'running', stateRevision: 2 });
+  apply(items, { type: 'provider_session', invocationId: 'claude_code:station',
+    owner: 'terminal', phase: 'local_observing', stateRevision: 3 });
+  apply(items, { type: 'provider_session', invocationId: 'claude_code:station',
+    owner: 'browser', phase: 'remote_controlling', stateRevision: 2 });
+  expect(items[0]).toMatchObject({ controlOwner: 'terminal', controlRevision: 3 });
+  apply(items, { type: 'provider_session', invocationId: 'claude_code:station',
+    owner: 'browser', phase: 'remote_controlling', stateRevision: 4 });
+  expect(items[0]).toMatchObject({ controlOwner: 'browser', controlRevision: 4 });
+});
+
 test('replaces the parent tool with one provider card and nests child activity', () => {
   const items: ChatItem[] = [{
     id: 'call-7', type: 'tool_call', name: 'codex', status: 'running', args: { prompt: 'fix it' },

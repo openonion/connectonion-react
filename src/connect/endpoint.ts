@@ -86,6 +86,7 @@ export type AgentInfoSource = {
   trust?: string;
   version?: string;
   model?: string;
+  provider_station?: unknown;
   balance_usd?: number;
   accepted_inputs?: AgentInfo['accepted_inputs'];
   onboard?: AgentInfo['onboard'];
@@ -146,6 +147,7 @@ export function toAgentInfo(source?: AgentInfoSource | null): Partial<AgentInfo>
   if (source?.trust) info.trust = source.trust;
   if (source?.version) info.version = source.version;
   if (source?.model) info.model = source.model;
+  if (source?.provider_station === 'claude_code') info.provider_station = 'claude_code';
   if (typeof source?.balance_usd === 'number') info.balance_usd = source.balance_usd;
   if (source?.accepted_inputs) info.accepted_inputs = source.accepted_inputs;
   if (source?.onboard) info.onboard = source.onboard;

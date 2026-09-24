@@ -109,6 +109,9 @@ export interface ProviderInvocationItem {
   currentSummary?: string;
   /** Monotonic semantic state version; protects reconnect replay from reviving stale controls. */
   stateRevision?: number;
+  controlOwner?: 'terminal' | 'browser';
+  controlPhase?: 'local_starting' | 'local_observing' | 'handover_to_remote' | 'remote_controlling' | 'handover_to_local' | 'completed' | 'failed';
+  controlRevision?: number;
   /** Optional real preview; absent means the UI must not fabricate a thumbnail. */
   artifact?: ProviderArtifact;
   permissionMode?: 'manual' | 'auto_approve' | 'full_access';
@@ -276,6 +279,7 @@ export interface AgentInfo {
   trust?: string;
   version?: string;
   model?: string;
+  provider_station?: 'claude_code';
   /** Agent's OpenOnion account balance in USD. Present only for co/* managed-key
    *  agents that published it (clients can't fetch it themselves — it's gated by
    *  the agent's private key). A startup snapshot, not a live figure. */
