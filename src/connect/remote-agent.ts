@@ -1917,6 +1917,22 @@ export class RemoteAgent {
       return;
     }
 
+    // A turn another device started on this conversation (connectonion#1606).
+    // The Host streams it to every device that has the conversation open, and
+    // sends the prompt first because nobody typed it here: without it this
+    // device shows an answer to a question it cannot see.
+    if (data?.type === 'user_message' && typeof data.content === 'string') {
+      const sid = typeof data.session_id === 'string' ? data.session_id : undefined;
+      const current = this._currentSession?.session_id;
+      if (sid && current && sid !== current) return;
+      this._addChatItem({ type: 'user', content: data.content });
+      this._interruptSent = false;
+      this._status = 'working';
+      this._error = null;
+      this._onMessage?.();
+      return;
+    }
+
     // Stream events → ChatItem mapping
     if (data?.type === 'llm_call' || data?.type === 'llm_result' ||
         data?.type === 'tool_call' || data?.type === 'tool_result' ||
