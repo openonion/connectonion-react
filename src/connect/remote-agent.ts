@@ -451,6 +451,13 @@ export class RemoteAgent {
     }
     return response.result as Record<string, unknown>;
   }
+  async wikiRead(): Promise<string> {
+    const response = await this._requestSessionFrame({type: 'WIKI_READ'}, ['WIKI_RESULT']);
+    if (response.ok !== true || typeof response.html !== 'string') {
+      throw new Error(typeof response.error === 'string' ? response.error : 'Wiki could not be loaded');
+    }
+    return response.html;
+  }
   get profile(): AgentInfo | null { return this._profile; }
   get sessionSyncSupported(): boolean { return this._sessionSyncSupported; }
 
