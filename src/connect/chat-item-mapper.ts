@@ -297,6 +297,13 @@ export function normalizeProviderInvocationSnapshot(
     item.provider,
     stateRevision,
   );
+  const controlRevision = providerStateRevision(item.controlRevision);
+  const controlOwner = item.controlOwner === 'terminal' || item.controlOwner === 'browser'
+    ? item.controlOwner : undefined;
+  const controlPhase = typeof item.controlPhase === 'string' && [
+    'local_starting', 'local_observing', 'handover_to_remote',
+    'remote_controlling', 'handover_to_local', 'completed', 'failed',
+  ].includes(item.controlPhase) ? item.controlPhase : undefined;
   const {
     artifact: _artifact,
     stateRevision: _stateRevision,
@@ -304,6 +311,9 @@ export function normalizeProviderInvocationSnapshot(
     continuationOf: _continuationOf,
     messages: _messages,
     providerPermission: _providerPermission,
+    controlOwner: _controlOwner,
+    controlPhase: _controlPhase,
+    controlRevision: _controlRevision,
     ...withoutUntrustedFields
   } = item;
   return {
@@ -313,6 +323,9 @@ export function normalizeProviderInvocationSnapshot(
     ...(continuationOf && { continuationOf }),
     ...(stateRevision !== undefined && { stateRevision }),
     ...(providerPermission && { providerPermission }),
+    ...(controlRevision && controlOwner && controlPhase && {
+      controlOwner, controlPhase, controlRevision,
+    }),
     ...(artifact && artifact.stateRevision === stateRevision && { artifact }),
   } as Extract<ChatItem, { type: 'provider_invocation' }>;
 }
@@ -354,6 +367,24 @@ export function mapEventToChatItem(
   const decoded = decodeIncomingEvent(event);
 
   switch (decoded.type as string) {
+    case 'provider_session': {
+      const revision = providerStateRevision(decoded.stateRevision);
+      const owner = decoded.owner;
+      const phase = decoded.phase;
+      if (!revision || (owner !== 'terminal' && owner !== 'browser')
+        || typeof phase !== 'string' || ![
+          'local_starting', 'local_observing', 'handover_to_remote',
+          'remote_controlling', 'handover_to_local', 'completed', 'failed',
+        ].includes(phase)) break;
+      const invocation = chatItems.find(item =>
+        item.type === 'provider_invocation' && item.id === decoded.invocationId);
+      if (!invocation || invocation.type !== 'provider_invocation'
+        || revision <= (invocation.controlRevision ?? 0)) break;
+      invocation.controlOwner = owner;
+      invocation.controlPhase = phase as NonNullable<typeof invocation.controlPhase>;
+      invocation.controlRevision = revision;
+      break;
+    }
     case 'provider_invocation': {
       if (
         typeof decoded.invocationId !== 'string'
