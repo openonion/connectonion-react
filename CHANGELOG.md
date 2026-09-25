@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.4-rc.6 — 2026-09-25
+
+### Fixed
+
+- Every `APPROVAL_RESPONSE` and `ASK_USER_RESPONSE` names the request it
+  answers as `request_id`, taken from the `id` the Host stamped on
+  `approval_needed` / `ask_user` (connectonion#1692). With one session open on
+  two devices, an answer without it is refused, and one naming an earlier
+  request is never applied to the next. No id is invented when an older Host
+  stamped none, and older Hosts ignore the field.
+- An `ERROR` with `code: "STALE_ANSWER"` closes that prompt as
+  `answeredElsewhere: true` instead of failing the turn, and is never
+  re-sent.
+
+### Release boundary
+
+- Pairs with ConnectOnion 1.8.8 (connectonion#1692). Publish through the
+  protected tag workflow under the npm `rc` dist-tag.
+
 ## 0.4.4-rc.2 — 2026-09-07
 
 ### Added
