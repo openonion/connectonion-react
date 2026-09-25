@@ -90,6 +90,13 @@ function isControlCenterAppDescriptor(value: unknown): value is ControlCenterApp
 
 interface PendingApproval {
   chatItemId: string;
+  /**
+   * The `id` the Host stamped on `approval_needed`, sent back as `request_id`.
+   * Undefined only when the Host stamped none (older Hosts); a locally
+   * generated chat item id is never sent, because a Host that checks ids
+   * would refuse a made-up one as stale.
+   */
+  requestId?: string;
   answered: boolean;
 }
 
@@ -403,6 +410,9 @@ export class RemoteAgent {
   private _reconnecting: Promise<Response> | null = null;
   private _reconnectReadyWaiters: ReconnectReadyWaiter[] = [];
   private _pendingApproval: PendingApproval | null = null;
+  // ask_user chat item ids that the Host stamped, as opposed to ids React
+  // generated for an id-less event. Only these may be sent as `request_id`.
+  private _hostAskUserIds = new Set<string>();
   private _pendingModeChange: PendingModeChange | null = null;
   private _sessionSyncSupported = false;
   private _pendingSessionRequests = new Map<string, PendingSessionRequest>();
@@ -843,23 +853,16 @@ export class RemoteAgent {
       ).catch(() => {});
       return;
     }
+    if (message.type === 'ASK_USER_RESPONSE') {
+      this._sendAskUserResponse(message);
+      return;
+    }
     if (message.type === 'ONBOARD_SUBMIT') {
       this._sendOpen(message);
     } else {
       this._sendAuthenticated(message);
     }
-    if (message.type === 'ASK_USER_RESPONSE') {
-      for (let i = this._chatItems.length - 1; i >= 0; i--) {
-        const item = this._chatItems[i];
-        if (item.type === 'ask_user' && !item.answered) {
-          item.answered = true;
-          item.answer = String(message.answer || '');
-          break;
-        }
-      }
-      this._status = 'working';
-      this._onMessage?.();
-    } else if (
+    if (
       message.type === 'APPROVAL_RESPONSE' ||
       message.type === 'ONBOARD_SUBMIT'
     ) {
@@ -1175,7 +1178,13 @@ export class RemoteAgent {
     pending: PendingApproval,
     response: Record<string, unknown>,
   ): void {
-    this._sendAuthenticated(response);
+    // Name the request this answers (connectonion#1692). With one session open
+    // on two devices, an answer that names nothing is refused, and one naming
+    // an earlier request is never applied to the request pending now. Hosts
+    // before 1.8.8 ignore the field.
+    this._sendAuthenticated(
+      pending.requestId ? { ...response, request_id: pending.requestId } : response,
+    );
     pending.answered = true;
     const item = this._chatItems.find(
       (candidate) => candidate.id === pending.chatItemId
@@ -1183,6 +1192,73 @@ export class RemoteAgent {
     );
     if (item?.type === 'approval_needed') item.answered = true;
     this._status = 'working';
+    this._onMessage?.();
+  }
+
+  /**
+   * Answer the question the Host is waiting on, naming it as `request_id`.
+   * A caller-supplied `request_id` wins; otherwise it is the newest unanswered
+   * `ask_user`, and its id is sent only if the Host stamped it.
+   */
+  private _sendAskUserResponse(message: Record<string, unknown>): void {
+    const named = typeof message.request_id === 'string' ? message.request_id : undefined;
+    let question: Extract<ChatItem, { type: 'ask_user' }> | undefined;
+    for (let i = this._chatItems.length - 1; i >= 0; i--) {
+      const item = this._chatItems[i];
+      if (item.type !== 'ask_user') continue;
+      if (named ? item.id === named : !item.answered) {
+        question = item;
+        break;
+      }
+    }
+    const requestId = named
+      ?? (question && this._hostAskUserIds.has(question.id) ? question.id : undefined);
+    this._sendAuthenticated(requestId ? { ...message, request_id: requestId } : message);
+    if (question) {
+      question.answered = true;
+      question.answer = String(message.answer || '');
+    }
+    this._status = 'working';
+    this._onMessage?.();
+  }
+
+  /**
+   * The Host refused an answer this device sent (connectonion#1692): the
+   * request was already answered, most likely on another device showing the
+   * same session, or the answer named no request while two devices could
+   * answer. Nothing was applied. Close the prompt and say it was answered
+   * elsewhere; never re-send, because the request it answered is over and
+   * re-sending could only hit a request this person has not seen.
+   *
+   * Not a failed turn: the turn goes on (on the other device), so input,
+   * connection and error state are left alone.
+   */
+  private _handleStaleAnswer(data: Record<string, unknown>): void {
+    const requestId = typeof data.request_id === 'string' ? data.request_id : undefined;
+    let prompt: ChatItem | undefined;
+    for (let i = this._chatItems.length - 1; i >= 0; i--) {
+      const item = this._chatItems[i];
+      if (item.type !== 'ask_user' && item.type !== 'approval_needed') continue;
+      // Without an id, the refused answer is the newest one this device sent.
+      if (requestId ? item.id === requestId : item.answered) {
+        prompt = item;
+        break;
+      }
+    }
+    if (prompt?.type === 'ask_user' || prompt?.type === 'approval_needed') {
+      prompt.answered = true;
+      prompt.answeredElsewhere = true;
+      if (prompt.type === 'ask_user') delete prompt.answer;
+    }
+    const pending = this._pendingApproval;
+    if (pending && prompt && pending.chatItemId === prompt.id) {
+      pending.answered = true;
+    }
+    if (this._chatItems.some((item) => (
+      (item.type === 'ask_user' || item.type === 'approval_needed') && !item.answered
+    ))) {
+      this._status = 'waiting';
+    }
     this._onMessage?.();
   }
 
@@ -1381,6 +1457,7 @@ export class RemoteAgent {
     this._connectionState = 'disconnected';
     this._error = null;
     this._pendingApproval = null;
+    this._hostAskUserIds.clear();
     this._sessionChangeListener = null;
     this._sessionSyncSupported = false;
     this._rejectSessionRequests(new Error('Conversation reset during Session Sync request'));
@@ -1958,6 +2035,7 @@ export class RemoteAgent {
     // Interactive events
     if (data?.type === 'ask_user') {
       this._status = 'waiting';
+      if (typeof data.id === 'string' && data.id) this._hostAskUserIds.add(data.id);
       this._addChatItem({
         type: 'ask_user',
         id: data.id != null ? String(data.id) : undefined,
@@ -1978,6 +2056,7 @@ export class RemoteAgent {
         : undefined;
       this._pendingApproval = {
         chatItemId,
+        requestId,
         answered: false,
       };
       this._status = 'waiting';
@@ -2127,6 +2206,10 @@ export class RemoteAgent {
     // condition" had been dropped and the caller was told the connection timed
     // out. `default: deny` is what `strict` ships, so that was the first
     // experience of every correctly configured agent meeting a new client. #434.
+    if (data?.type === 'ERROR' && data.code === 'STALE_ANSWER') {
+      this._handleStaleAnswer(data as Record<string, unknown>);
+      return;
+    }
     if (data?.type === 'ERROR') {
       const message = String(data.message || data.error || 'Unknown error');
       // Pre-ack Hosts reported a rejected provider stop as a generic ERROR.

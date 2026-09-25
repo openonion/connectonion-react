@@ -99,8 +99,8 @@ The `ui` array contains events for rendering the conversation. Each event has:
 | `agent` | Agent response | `content: string` |
 | `thinking` | Host-supplied thought or running indicator | `status`, optional `content`, optional `kind` |
 | `tool_call` | Tool execution | `name`, `args`, `status`, `result` |
-| `ask_user` | Agent question | `text: string` |
-| `approval_needed` | Tool requires a decision | `tool`, `arguments`, `description?`, `answered?` |
+| `ask_user` | Agent question | `text: string`, `answered?`, `answer?`, `answeredElsewhere?` |
+| `approval_needed` | Tool requires a decision | `tool`, `arguments`, `description?`, `answered?`, `answeredElsewhere?` |
 | `onboard_required` | Host admission needs invite/payment | `methods`, `paymentAmount?`, `paymentAddress?` |
 | `onboard_success` | Admission completed | `level`, `message` |
 
@@ -113,7 +113,17 @@ diagnostics or model fields; third-party Hosts define their own privacy contract
 
 Render one approval item and answer it through the hook. The React package owns
 OIP request IDs, Host session correlation, and duplicate suppression;
-components should not construct protocol frames. A Host may deliver
+components should not construct protocol frames. Every approval and
+`ask_user` answer names the request it answers as `request_id` (the `id` the
+Host stamped on the event); Hosts from ConnectOnion 1.8.8 require it once the
+same session is open on two devices, and older Hosts ignore it.
+
+When the same session is open on two devices, the other device may answer
+first. The Host then refuses this device's answer with `STALE_ANSWER` and
+applies it to nothing. React closes that prompt with `answered: true` and
+`answeredElsewhere: true` (and drops an `ask_user` item's local `answer`),
+does not set `error`, and never re-sends. Show it as "answered on another
+device". A Host may deliver
 `approval_needed` before a separate tool update, so React creates or reuses one
 stable running tool card before appending the approval item.
 

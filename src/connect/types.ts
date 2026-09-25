@@ -198,8 +198,8 @@ export type ChatItem =
   | { id: string; type: 'thinking'; status: 'running' | 'done' | 'error'; model?: string; duration_ms?: number; content?: string; kind?: string; context_percent?: number; usage?: LLMUsage }
   | { id: string; type: 'tool_call'; name: string; args?: Record<string, unknown>; summary?: string; status: 'running' | 'done' | 'error'; result?: string; timing_ms?: number }
   | ProviderInvocationItem
-  | { id: string; type: 'ask_user'; text: string; options: string[]; multi_select: boolean; input_type?: string; fields?: AskUserField[]; answered?: boolean; answer?: string }
-  | ({ id: string; type: 'approval_needed'; tool: string; arguments: Record<string, unknown>; description?: string; batch_remaining?: Array<{ tool: string; arguments: string }>; answered?: boolean } & ProviderApprovalContext)
+  | { id: string; type: 'ask_user'; text: string; options: string[]; multi_select: boolean; input_type?: string; fields?: AskUserField[]; answered?: boolean; answer?: string; answeredElsewhere?: boolean }
+  | ({ id: string; type: 'approval_needed'; tool: string; arguments: Record<string, unknown>; description?: string; batch_remaining?: Array<{ tool: string; arguments: string }>; answered?: boolean; answeredElsewhere?: boolean } & ProviderApprovalContext)
   | { id: string; type: 'onboard_required'; methods: string[]; paymentAmount?: number; paymentAddress?: string }
   | { id: string; type: 'onboard_success'; level: string; message: string }
   | { id: string; type: 'intent'; status: 'analyzing' | 'understood'; ack?: string; is_build?: boolean }
