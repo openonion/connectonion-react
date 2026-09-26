@@ -485,6 +485,29 @@ test('fails closed when a direct Codex acknowledgement has a different revision'
   expect(agent._pendingProviderInput).toBeNull();
 });
 
+test('reports a native Claude start failure without waiting for the message timeout', async () => {
+  const agent = new RemoteAgent('0x' + 'a'.repeat(64), {}) as any;
+  const socket = new FakeSocket();
+  agent._ws = socket;
+  agent._authenticated = true;
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'provider_invocation', invocationId: 'claude_code:outer-call',
+    parentToolCallId: 'outer-call', provider: 'claude_code',
+    status: 'completed', stateRevision: 4,
+  }) });
+
+  const sent = agent.sendProviderInput('claude_code:outer-call', 'Start a turn.');
+  const request = JSON.parse(socket.sent[0]);
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'PROVIDER_INPUT_ACK', requestId: request.requestId,
+    invocationId: 'claude_code:outer-call', accepted: false,
+    stateRevision: 4, reason: 'provider_start_failed',
+  }) });
+
+  await expect(sent).rejects.toThrow('Claude Code could not start this turn. Check the terminal, then try again.');
+  expect(agent._pendingProviderInput).toBeNull();
+});
+
 test('returns a retryable failure when the Host rejects a scoped provider stop', async () => {
   const agent = new RemoteAgent('0x' + 'a'.repeat(64), {}) as any;
   const socket = new FakeSocket();
