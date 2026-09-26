@@ -151,7 +151,9 @@ interface PendingSessionRequest {
 
 const MODE_CHANGE_TIMEOUT_MS = 30000;
 const PROVIDER_INTERRUPT_ACK_TIMEOUT_MS = 10000;
-const PROVIDER_INPUT_ACK_TIMEOUT_MS = 10000;
+// The Host confirms a native message only after the provider has started its
+// matching turn. Claude Code startup can take longer than ten seconds.
+const PROVIDER_INPUT_ACK_TIMEOUT_MS = 60000;
 const PROVIDER_PERMISSION_ACK_TIMEOUT_MS = 10000;
 const SESSION_SYNC_TIMEOUT_MS = 30000;
 const WEBSOCKET_OPEN = 1;
