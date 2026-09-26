@@ -221,6 +221,7 @@ function providerInterruptError(reason: unknown): Error {
 }
 
 function providerInputError(reason: unknown): Error {
+  if (reason === 'provider_start_failed') return new Error('Claude Code could not start this turn. Check the terminal, then try again.');
   if (reason === 'not_active') return new Error('This provider session is not available to continue. Refresh the Work Room and try again.');
   if (reason === 'unsupported_provider') return new Error('This provider does not support direct Work Room messages.');
   if (reason === 'state_changed') return new Error('The provider changed state before the message was sent. Wait for the Work Room to refresh, then try again.');
