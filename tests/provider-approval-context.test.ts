@@ -266,6 +266,35 @@ test('resolves a direct Codex Work Room message only after its matching Host ack
   expect(agent._pendingProviderInput).toBeNull();
 });
 
+test('keeps a Claude Work Room draft pending through a slow native startup', async () => {
+  jest.useFakeTimers();
+  const agent = new RemoteAgent('0x' + 'a'.repeat(64), {}) as any;
+  const socket = new FakeSocket();
+  agent._ws = socket;
+  agent._authenticated = true;
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'provider_invocation', invocationId: 'claude_code:station:session-1',
+    parentToolCallId: 'station-1', provider: 'claude_code',
+    providerDisplayName: 'Claude Code', status: 'completed', stateRevision: 4,
+  }) });
+
+  const sent = agent.sendProviderInput('claude_code:station:session-1', 'Continue.');
+  const request = JSON.parse(socket.sent[0]);
+  jest.advanceTimersByTime(12_000);
+  expect(agent._pendingProviderInput?.requestId).toBe(request.requestId);
+
+  agent._handleMessage({ data: JSON.stringify({
+    type: 'PROVIDER_INPUT_ACK', requestId: request.requestId,
+    invocationId: 'claude_code:station:session-1',
+    accepted: true, stateRevision: 4,
+  }) });
+  await expect(sent).resolves.toEqual({
+    invocationId: 'claude_code:station:session-1', stateRevision: 4,
+  });
+  expect(agent._pendingProviderInput).toBeNull();
+  jest.useRealTimers();
+});
+
 test('commits a provider permission only after a newer authoritative Host acknowledgement', async () => {
   const agent = new RemoteAgent('0x' + 'a'.repeat(64), {}) as any;
   const socket = new FakeSocket();
