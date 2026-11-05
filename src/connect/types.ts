@@ -71,7 +71,7 @@ export interface ProviderActivity {
   /** Present for the old generic tool fallback only. */
   name?: string;
   args?: Record<string, unknown>;
-  status: 'running' | 'done' | 'error';
+  status: 'running' | 'done' | 'error' | 'stopped';
   result?: string;
   /** Stable provider order; present for typed OIP activity events. */
   sequence?: number;
@@ -196,7 +196,7 @@ export type ChatItem =
   | { id: string; type: 'user'; content: string; images?: string[]; files?: FileAttachment[] }
   | { id: string; type: 'agent'; content: string; images?: string[] }
   | { id: string; type: 'thinking'; status: 'running' | 'done' | 'error'; model?: string; duration_ms?: number; content?: string; kind?: string; context_percent?: number; usage?: LLMUsage }
-  | { id: string; type: 'tool_call'; name: string; args?: Record<string, unknown>; summary?: string; status: 'running' | 'done' | 'error'; result?: string; timing_ms?: number }
+  | { id: string; type: 'tool_call'; name: string; args?: Record<string, unknown>; summary?: string; status: 'running' | 'done' | 'error' | 'stopped'; result?: string; timing_ms?: number }
   | ProviderInvocationItem
   | { id: string; type: 'ask_user'; text: string; options: string[]; multi_select: boolean; input_type?: string; fields?: AskUserField[]; answered?: boolean; answer?: string; answeredElsewhere?: boolean }
   | ({ id: string; type: 'approval_needed'; tool: string; arguments: Record<string, unknown>; description?: string; batch_remaining?: Array<{ tool: string; arguments: string }>; answered?: boolean; answeredElsewhere?: boolean } & ProviderApprovalContext)

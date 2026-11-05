@@ -13,6 +13,26 @@ function apply(items: ChatItem[], event: Record<string, unknown>) {
   mapEventToChatItem(items, event, item => items.push(item as ChatItem));
 }
 
+test.each(['tool_result', 'tool_call_update'])('%s preserves a user interruption as stopped', (type) => {
+  const items: ChatItem[] = [];
+  apply(items, { type: 'tool_call', tool_id: 'pause', name: 'bash', args: { command: 'sleep 90' } });
+  apply(items, { type, tool_id: 'pause', status: 'interrupted', result: 'Interrupted by user', timing_ms: 17000 });
+
+  expect(items[0]).toMatchObject({
+    type: 'tool_call', status: 'stopped', result: 'Interrupted by user', timing_ms: 17000,
+  });
+});
+
+test('a legacy nested tool interruption is stopped without stopping its provider', () => {
+  const items: ChatItem[] = [];
+  const context = { parentToolCallId: 'outer', invocationId: 'codex:outer' };
+  apply(items, { type: 'provider_invocation', ...context, provider: 'codex', status: 'running' });
+  apply(items, { type: 'tool_call', ...context, tool_id: 'pause', name: 'bash' });
+  apply(items, { type: 'tool_result', ...context, tool_id: 'pause', status: 'interrupted' });
+
+  expect(items[0]).toMatchObject({ status: 'running', activities: [{ id: 'pause', status: 'stopped' }] });
+});
+
 const codexPermission = (revision: number) => ({
   provider: 'codex',
   activeOptionId: 'codex:workspace-ask',

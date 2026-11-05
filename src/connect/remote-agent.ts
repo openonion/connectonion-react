@@ -1637,10 +1637,16 @@ export class RemoteAgent {
 
     const attempt = this._doConnect();
     this._connecting = attempt;
+    this._onMessage?.();
     // Clear on settle either way (both branches handled, so this derived promise
     // never surfaces as an unhandled rejection — `attempt` is what callers await).
     const clear = () => { if (this._connecting === attempt) this._connecting = null; };
-    attempt.then(clear, clear);
+    attempt.then(clear, () => {
+      if (this._connecting !== attempt) return;
+      clear();
+      this._connectionState = 'disconnected';
+      this._onMessage?.();
+    });
     return attempt;
   }
 
@@ -1649,6 +1655,7 @@ export class RemoteAgent {
     // false, so nothing can use it, and overwriting _ws below would leak it.
     if (this._ws && !this._hasReadyConnection()) this._closeWs();
 
+    this._connectionState = 'reconnecting';
     this._signer = await ensureSigner(this._signer, this._keys);
     await this._resolveEndpointOnce();
 
@@ -1659,7 +1666,6 @@ export class RemoteAgent {
     // Wait for open
     await new Promise<void>((resolve, reject) => {
       ws.onopen = () => {
-        this._connectionState = 'connected';
         this._lastActivityTime = Date.now();
         this._startPingMonitor();
         resolve();
@@ -2227,7 +2233,7 @@ export class RemoteAgent {
         return;
       }
       if (
-        /authenticate first \(send CONNECT\)/i.test(message)
+        /authenticate first \(send CONNECT\)|not authenticated \(send CONNECT first\)/i.test(message)
         && this._pendingInputMessage
         && !this._authenticationRecoveryAttempted
       ) {
@@ -2575,8 +2581,11 @@ export class RemoteAgent {
     this._stopPingMonitor();
     this._pingTimer = setInterval(() => {
       if (Date.now() - this._lastActivityTime > 60000) {
-        this._stopPingMonitor();
-        this._ws?.close();
+        const ws = this._ws;
+        if (ws) {
+          this._handleSocketConnectionLoss(ws);
+          ws.close();
+        }
       }
     }, 10000);
   }

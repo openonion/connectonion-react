@@ -66,6 +66,93 @@ describe('RemoteAgent reconnect races', () => {
     jest.useRealTimers();
   });
 
+  test('a subscriber can reconnect without starting a second handshake', async () => {
+    const agent = remoteAgent();
+    let requested = false;
+    let following: Promise<void> | undefined;
+    agent.onMessage = () => {
+      if (agent.connectionState !== 'reconnecting' || requested) return;
+      requested = true;
+      following = agent.connect();
+    };
+
+    const connecting = agent.connect();
+    await settleSigner();
+
+    expect(requested).toBe(true);
+    expect(FakeSocket.instances).toHaveLength(1);
+    const socket = FakeSocket.instances[0] as any;
+    socket.readyState = 1;
+    socket.onopen?.({});
+    await settleSigner();
+    socket.onmessage?.({ data: JSON.stringify({ type: 'CONNECTED', session_id: SESSION_ID }) });
+    await Promise.all([connecting, following]);
+    agent.reset();
+  });
+
+  test.each(['onclose', 'onerror'])('a relay %s invalidates auth and the next input waits for CONNECTED', async (event) => {
+    const agent = remoteAgent();
+    agent._directUrl = undefined;
+    agent._resolveEndpointOnce = async () => {};
+    const connecting = agent.connect();
+    await settleSigner();
+    const socket = FakeSocket.instances[0] as any;
+    socket.readyState = 1;
+    socket.onopen?.({});
+    await settleSigner();
+    socket.onmessage?.({ data: JSON.stringify({ type: 'CONNECTED', session_id: SESSION_ID }) });
+    await connecting;
+
+    const observed: string[] = [];
+    agent.onMessage = () => observed.push(agent.connectionState);
+    socket.readyState = 3;
+    socket[event]?.({});
+    expect(agent.connectionState).toBe('disconnected');
+    expect(agent._authenticated).toBe(false);
+    expect(observed).toContain('disconnected');
+
+    const response = agent.input('inspect the workspace');
+    await settleSigner();
+    const replacement = FakeSocket.instances[1] as any;
+    replacement.readyState = 1;
+    replacement.onopen?.({});
+    await settleSigner();
+    replacement.onmessage?.({ data: JSON.stringify({ type: 'PING' }) });
+    expect(replacement.sent.map((frame: string) => JSON.parse(frame).type)).toEqual(['CONNECT', 'PONG']);
+    expect(agent.connectionState).toBe('reconnecting');
+    expect(observed[observed.length - 1]).toBe('reconnecting');
+    expect(agent._authenticated).toBe(false);
+
+    replacement.onmessage?.({ data: JSON.stringify({ type: 'CONNECTED', session_id: SESSION_ID }) });
+    await settleSigner();
+    expect(replacement.sent.map((frame: string) => JSON.parse(frame).type)).toEqual(['CONNECT', 'PONG', 'INPUT']);
+    replacement.onmessage?.({ data: JSON.stringify({ type: 'OUTPUT', result: 'Ready' }) });
+    await expect(response).resolves.toEqual({ text: 'Ready', done: true });
+    expect(agent.connectionState).toBe('connected');
+    expect(socket.sent.map((frame: string) => JSON.parse(frame).type)).toEqual(['CONNECT']);
+    agent.reset();
+  });
+
+  test('keepalive expiry invalidates auth without waiting for the socket close handshake', () => {
+    const agent = remoteAgent();
+    const socket = new FakeSocket();
+    socket.readyState = 1;
+    agent._ws = socket;
+    agent._authenticated = true;
+    agent._connectionState = 'connected';
+    agent._lastActivityTime = Date.now();
+    const onMessage = jest.fn();
+    agent.onMessage = onMessage;
+    agent._startPingMonitor();
+
+    jest.advanceTimersByTime(70000);
+
+    expect(socket.closeCalls).toBe(1);
+    expect(agent.connectionState).toBe('disconnected');
+    expect(agent._authenticated).toBe(false);
+    expect(onMessage).toHaveBeenCalled();
+  });
+
   test('an OIP status query never reconnects the owned transport', async () => {
     const agent = remoteAgent();
     agent._transportSelection = {
@@ -162,7 +249,10 @@ describe('RemoteAgent reconnect races', () => {
     await Promise.all([firstConnect, secondConnect]);
   });
 
-  test('an input rejected before Host auth reconnects and is sent exactly once', async () => {
+  test.each([
+    'authenticate first (send CONNECT)',
+    'INPUT rejected: not authenticated (send CONNECT first)',
+  ])('an input rejected with "%s" reconnects and is sent exactly once', async (message) => {
     const agent = remoteAgent();
     const staleSocket = new FakeSocket();
     staleSocket.readyState = 1;
@@ -177,7 +267,7 @@ describe('RemoteAgent reconnect races', () => {
     ]);
 
     agent._handleMessage({
-      data: JSON.stringify({ type: 'ERROR', message: 'authenticate first (send CONNECT)' }),
+      data: JSON.stringify({ type: 'ERROR', message }),
     });
     await settleSigner();
 
