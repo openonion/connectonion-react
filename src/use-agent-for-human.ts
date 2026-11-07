@@ -40,7 +40,8 @@ export interface UseAgentForHumanReturn {
   status: AgentStatus;
 
   /**
-   * WebSocket relay connection state: 'disconnected' | 'connected' | 'reconnecting'.
+   * 'connecting' for the first handshake; 'reconnecting' when restoring a connection.
+   * 'connected' is authenticated and ready; 'disconnected' has no usable connection.
    * Updated synchronously whenever the agent's `onMessage` callback fires.
    */
   connectionState: ConnectionState;

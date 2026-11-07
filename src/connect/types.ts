@@ -427,7 +427,8 @@ export type Mode = 'read-only' | 'auto' | 'full-access';
 
 export type AgentStatus = 'idle' | 'working' | 'waiting';
 
-export type ConnectionState = 'disconnected' | 'connected' | 'reconnecting';
+/** First handshake, authenticated transport, restoration, or no usable connection. */
+export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
 
 export type RemoteSessionStatus = 'running' | 'connected' | 'not_found';
 

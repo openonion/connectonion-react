@@ -219,11 +219,14 @@ describe('useAgentForHuman hook', () => {
         useAgentForHuman(addr, 'warm-session-123')
       );
 
+      act(() => result.current.connect());
+      expect(result.current.connectionState).toBe('connecting');
+
       await act(async () => {
-        result.current.connect();
         await flush();
       });
 
+      expect(result.current.connectionState).toBe('connected');
       expect(sentFrames.find(frame => frame.type === 'CONNECT')).toMatchObject({
         session_id: 'warm-session-123',
       });
