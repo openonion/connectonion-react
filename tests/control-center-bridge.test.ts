@@ -121,3 +121,23 @@ it('bounds recent normalized state by UTF-8 bytes while retaining small recent m
   expect(result.truncated).toBe(true);
   expect(result.chatItems).toEqual([{type:'user',content:'recent'}]);
 });
+
+it('transmits connecting snapshots and refuses actions until connected', async () => {
+  const [a, b] = pair();
+  const states: ControlSnapshot[] = [];
+  const client = createControlCenterClient(b, revision, 'epoch');
+  client.subscribe(state => states.push(state));
+  const connecting: ControlSnapshot = { ...snapshot(), connectionState: 'connecting' };
+  const host = createControlCenterHost(a, { revision, epoch: 'epoch', snapshot: connecting,
+    sendMessage: async () => ({ sessionId: 's' }), runSkill: async () => ({ sessionId: 's' }) });
+  await flush();
+  expect(states[0]?.connectionState).toBe('connecting');
+  await expect(client.sendMessage('Hello')).rejects.toThrow('Agent connection is not ready');
+  host.publish(snapshot());
+  await flush();
+  expect(states[1]?.connectionState).toBe('connected');
+  host.publish(connecting);
+  await flush();
+  expect(states[2]?.connectionState).toBe('connecting');
+  host.dispose(); client.dispose();
+});

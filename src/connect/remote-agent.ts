@@ -354,6 +354,7 @@ export class RemoteAgent {
   // Public reactive state
   _status: AgentStatus = 'idle';
   _connectionState: ConnectionState = 'disconnected';
+  private _hasConnected = false;
   _currentSession: SessionState | null = null;
   _chatItems: ChatItem[] = [];
   _error: Error | null = null;
@@ -388,6 +389,7 @@ export class RemoteAgent {
   private _inputReject: ((reason?: unknown) => void) | null = null;
   private _inputTimer: ReturnType<typeof setTimeout> | null = null;
   private _pendingInputMessage: Record<string, unknown> | null = null;
+  private _inputRecoverable = false;
   private _authenticationRecoveryAttempted = false;
 
   // PING/PONG health check
@@ -699,7 +701,10 @@ export class RemoteAgent {
 
     try {
       this._pendingInputMessage = msg;
-      this._authenticationRecoveryAttempted = false;
+      if (!isInterjection) {
+        this._inputRecoverable = true;
+        this._authenticationRecoveryAttempted = false;
+      }
       this._sendAuthenticated(msg);
     } catch (cause) {
       const error = cause instanceof Error ? cause : new Error(String(cause));
@@ -1453,6 +1458,7 @@ export class RemoteAgent {
     this._settleReconnectReady(resetError);
     this._closeWs();
     this._currentSession = null;
+    this._hasConnected = false;
     this._controlCenterState = null;
     this._controlCenterApp = null;
     this._chatItems = [];
@@ -1637,10 +1643,16 @@ export class RemoteAgent {
 
     const attempt = this._doConnect();
     this._connecting = attempt;
+    this._onMessage?.();
     // Clear on settle either way (both branches handled, so this derived promise
     // never surfaces as an unhandled rejection — `attempt` is what callers await).
     const clear = () => { if (this._connecting === attempt) this._connecting = null; };
-    attempt.then(clear, clear);
+    attempt.then(clear, () => {
+      if (this._connecting !== attempt) return;
+      clear();
+      this._connectionState = 'disconnected';
+      this._onMessage?.();
+    });
     return attempt;
   }
 
@@ -1649,6 +1661,7 @@ export class RemoteAgent {
     // false, so nothing can use it, and overwriting _ws below would leak it.
     if (this._ws && !this._hasReadyConnection()) this._closeWs();
 
+    this._connectionState = this._hasConnected ? 'reconnecting' : 'connecting';
     this._signer = await ensureSigner(this._signer, this._keys);
     await this._resolveEndpointOnce();
 
@@ -1659,12 +1672,15 @@ export class RemoteAgent {
     // Wait for open
     await new Promise<void>((resolve, reject) => {
       ws.onopen = () => {
-        this._connectionState = 'connected';
         this._lastActivityTime = Date.now();
         this._startPingMonitor();
         resolve();
       };
       ws.onerror = (err) => reject(new Error(`WebSocket connection failed: ${String(err)}`));
+      ws.onclose = () => {
+        reject(new Error('WebSocket closed before opening'));
+        this._handleSocketConnectionLoss(ws);
+      };
     });
 
     // Wire up persistent message handler
@@ -1746,6 +1762,13 @@ export class RemoteAgent {
     if (data?.type === 'PING') {
       this._ws?.send(JSON.stringify({ type: 'PONG' }));
       return;
+    }
+
+    // Keepalive and handshake frames do not acknowledge INPUT. Any other Host
+    // frame may mean execution has started, including acks handled below with
+    // early returns. Once observed, never replay this turn (even on interjection).
+    if (data?.type && !['PONG', 'CONNECTED', 'ERROR'].includes(data.type)) {
+      this._inputRecoverable = false;
     }
 
     const sessionRequestId = typeof data?.request_id === 'string'
@@ -1875,6 +1898,7 @@ export class RemoteAgent {
         this._rejectUnsupportedProtocol(data.protocol);
         return;
       }
+      this._hasConnected = true;
       this._sessionSyncSupported = supportsSessionSync(data.protocol);
       this._modeState = hostSessionModeState(data);
       if (this._modeState) {
@@ -2177,15 +2201,14 @@ export class RemoteAgent {
 
       // Don't close WS — keep it for next input()
       const resolve = this._inputResolve;
-      this._pendingInputMessage = null;
-      this._authenticationRecoveryAttempted = false;
       this._settleInput();
       resolve?.({ text: result, done: true });
     }
 
-    // ERROR — reject input() promise, and keep the socket.
+    // Host ERROR — reject input() promise, and keep the socket. Relay connection
+    // loss is handled separately below because the Host is no longer reachable.
     //
-    // An ERROR frame is the host answering, not the transport failing. This used to
+    // A Host ERROR frame is the host answering, not the transport failing. This used to
     // run `_closeWs()` for every one of them, which made a mistyped invite code
     // permanent: the host replies `{"type": "ERROR", "message": "Invalid invite code"}`
     // and deliberately holds the connection open for a second try —
@@ -2226,13 +2249,27 @@ export class RemoteAgent {
         );
         return;
       }
+      const hostDisconnected = /^Agent not connected: \S+; reconnect with a fresh CONNECT$/i.test(message);
       if (
-        /authenticate first \(send CONNECT\)/i.test(message)
+        (hostDisconnected || /authenticate first \(send CONNECT\)|not authenticated \(send CONNECT first\)/i.test(message))
         && this._pendingInputMessage
+        && this._inputRecoverable
         && !this._authenticationRecoveryAttempted
       ) {
         this._authenticationRecoveryAttempted = true;
         this._recoverAuthenticationAndRetry(this._pendingInputMessage);
+        return;
+      }
+
+      if (hostDisconnected) {
+        const error = new Error(this._pendingInputMessage
+          ? 'Connection lost: Host disconnected. Your input may already have been received. Automatic retry has stopped.'
+          : 'Connection lost: Host disconnected.');
+        this._error = error;
+        this._clearPlaceholder();
+        this._pendingApproval = null;
+        this._closeWs();
+        this._handleConnectionLoss(error);
         return;
       }
 
@@ -2255,8 +2292,6 @@ export class RemoteAgent {
       if (this._connectReject && !onboarding) this._settleConnect(err);
       if (!onboarding) this._status = 'idle';
       const reject = this._inputReject;
-      this._pendingInputMessage = null;
-      this._authenticationRecoveryAttempted = false;
       this._settleInput();
       reject?.(err);
     }
@@ -2296,8 +2331,7 @@ export class RemoteAgent {
     this._onMessage?.();
   }
 
-  private _handleConnectionLoss(): void {
-    const connectionError = new Error('Connection closed before response');
+  private _handleConnectionLoss(connectionError = new Error('Connection closed before response')): void {
     // Make recovery callable before subscribers render the disconnected UI.
     // Promise rejection handlers clear this on a later microtask, which is too
     // late for an immediate online/visibility event or reconnect click.
@@ -2495,6 +2529,9 @@ export class RemoteAgent {
 
   private _settleInput(): void {
     if (this._inputTimer) { clearTimeout(this._inputTimer); this._inputTimer = null; }
+    this._pendingInputMessage = null;
+    this._inputRecoverable = false;
+    this._authenticationRecoveryAttempted = false;
     this._inputResolve = null;
     this._inputReject = null;
   }
@@ -2515,8 +2552,6 @@ export class RemoteAgent {
       this._error = error;
       this._clearPlaceholder();
       this._status = 'idle';
-      this._pendingInputMessage = null;
-      this._authenticationRecoveryAttempted = false;
       const reject = this._inputReject;
       this._settleInput();
       reject?.(error);
@@ -2575,8 +2610,11 @@ export class RemoteAgent {
     this._stopPingMonitor();
     this._pingTimer = setInterval(() => {
       if (Date.now() - this._lastActivityTime > 60000) {
-        this._stopPingMonitor();
-        this._ws?.close();
+        const ws = this._ws;
+        if (ws) {
+          this._handleSocketConnectionLoss(ws);
+          ws.close();
+        }
       }
     }, 10000);
   }

@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.4.4-rc.9 — 2026-11-07
+
+### Changed
+
+- `connectionState` now distinguishes `connecting` (the first handshake, even
+  when a new chat already has a local session ID) from `reconnecting` (restoring
+  a previously connected transport or explicitly resuming a session). `connected`
+  means authenticated and ready; `disconnected` means there is no usable
+  connection, including after a failed handshake or connection loss. Consumers
+  with exhaustive state switches must handle `connecting`.
+- **Breaking for exhaustive switches:** tool-call status now includes `stopped`
+  alongside `running`, `done` and `error`. Handle it as a terminal interrupted
+  tool state in `ChatItem` tool calls and provider activity in `ProviderActivity`.
+
+### Fixed
+
+- A relay `ERROR` saying `Agent not connected: 0xabc; reconnect with a fresh
+  CONNECT` now reconnects and resends INPUT once after CONNECTED only if no Host
+  response has arrived for the turn. Any Host stream event, acknowledgement or
+  approval request disables recovery; a later relay ERROR ends the turn with a
+  connection-loss error and `disconnected` state. The relay ERROR can also follow
+  a mid-turn Host loss, so it does not guarantee INPUT was never delivered;
+  retrying before the first Host response still carries delivery ambiguity
+  (oo-api#284).
+- A WebSocket closing before open now rejects the connection attempt and
+  exposes `disconnected` with an error instead of hanging.
+
 ## 0.4.4-rc.6 — 2026-09-25
 
 ### Fixed

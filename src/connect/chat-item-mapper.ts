@@ -83,7 +83,8 @@ const MAX_PROVIDER_ARTIFACT_DATA_URL_LENGTH = 262_144;
 const PROVIDER_CORRELATION_ID = /^[A-Za-z0-9._:-]{1,512}$/;
 const MAX_PROVIDER_MESSAGE_LENGTH = 16_000;
 
-function toolResultStatus(status: unknown): 'done' | 'error' {
+function toolResultStatus(status: unknown): 'done' | 'error' | 'stopped' {
+  if (status === 'interrupted') return 'stopped';
   return typeof status === 'string' && SUCCESSFUL_TOOL_RESULTS.has(status)
     ? 'done'
     : 'error';

@@ -64,7 +64,7 @@ function validSnapshot(value: unknown): value is ControlSnapshot {
     && value.chatItems.length <= 2000 && Array.isArray(value.skills) && value.skills.length <= 2000
     && value.skills.every((skill: unknown) => object(skill) && typeof skill.name === 'string')
     && ['idle', 'working', 'waiting'].includes(value.status)
-    && ['disconnected', 'connected', 'reconnecting'].includes(value.connectionState);
+    && ['disconnected', 'connecting', 'connected', 'reconnecting'].includes(value.connectionState);
 }
 function scope(revision: string, epoch: string) {
   if (!REVISION.test(revision) || !ID.test(epoch)) throw new Error('Invalid Control Center bridge scope');
